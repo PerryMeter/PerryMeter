@@ -1,10 +1,8 @@
 export const theme = {
   bg: '#070A0C',
   surface: '#0D1316',
-  'surface-2': '#121A1E',
   surface2: '#121A1E',
   line: '#1E2A2F',
-  'line-strong': '#2B3B41',
   lineStrong: '#2B3B41',
   text: '#E7EEF0',
   muted: '#93A4AA',
