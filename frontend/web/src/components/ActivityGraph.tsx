@@ -15,6 +15,7 @@ type ActivityGraphProps = {
   history: HistoryPoint[];
   now: number;
   isFresh: boolean;
+  isKiosk?: boolean;
   className?: string;
 };
 
@@ -102,6 +103,7 @@ export function ActivityGraph({
   history,
   now,
   isFresh,
+  isKiosk = false,
   className,
 }: ActivityGraphProps) {
   const chartData = useMemo(() => {
@@ -131,28 +133,36 @@ export function ActivityGraph({
 
   return (
     <div
-      className={`rounded-[10px] border border-line bg-surface flex flex-col justify-between shrink-0 ${
+      className={`rounded-[10px] border border-line bg-surface flex flex-col shrink-0 min-w-0 ${
+        isKiosk ? 'p-2' : 'justify-between'
+      } ${
         className ??
         'p-4 my-2 h-[140px] md:h-[160px] min-[1100px]:h-[clamp(140px,22vh,200px)]'
       }`}
     >
-      <div className="flex items-center justify-between text-xs mb-1 shrink-0">
-        <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted">
-          ACTIVITY
-        </span>
-        <span className="text-xs text-muted font-mono">Last 60 s</span>
-      </div>
+      {!isKiosk && (
+        <div className="flex items-center justify-between text-xs mb-1 shrink-0">
+          <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted">
+            ACTIVITY
+          </span>
+          <span className="text-xs text-muted font-mono">Last 60 s</span>
+        </div>
+      )}
 
-      <div className="flex-1 w-full min-h-0 relative">
+      <div className="flex-1 w-full min-h-0 min-w-0 relative">
         {history.length === 0 ? (
           <div className="h-full w-full flex items-center justify-center">
             <span className="font-mono text-xs text-faint">Waiting for data</span>
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer width="100%" height="100%" minWidth={0}>
             <AreaChart
               data={chartData}
-              margin={{ top: 6, right: 16, left: 0, bottom: 0 }}
+              margin={
+                isKiosk
+                  ? { top: 4, right: 4, left: 4, bottom: 2 }
+                  : { top: 6, right: 16, left: 0, bottom: 0 }
+              }
             >
               <defs>
                 <linearGradient id="activity-fill" x1="0" y1="0" x2="0" y2="1">
@@ -171,7 +181,7 @@ export function ActivityGraph({
                 tickLine={false}
                 tick={{
                   fill: theme.faint,
-                  fontSize: 11,
+                  fontSize: isKiosk ? 10 : 11,
                   fontFamily: "'IBM Plex Mono', monospace",
                 }}
               />
@@ -182,12 +192,17 @@ export function ActivityGraph({
                 tickFormatter={(val: number) => `${val}%`}
                 axisLine={false}
                 tickLine={false}
-                tick={{
-                  fill: theme.faint,
-                  fontSize: 11,
-                  fontFamily: "'IBM Plex Mono', monospace",
-                }}
-                width={36}
+                hide={isKiosk}
+                width={isKiosk ? 0 : 36}
+                tick={
+                  isKiosk
+                    ? false
+                    : {
+                        fill: theme.faint,
+                        fontSize: 11,
+                        fontFamily: "'IBM Plex Mono', monospace",
+                      }
+                }
               />
               {alertRuns.map((run) => (
                 <ReferenceArea
