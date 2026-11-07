@@ -26,7 +26,7 @@ npm run dev -- --host
 
 The dashboard supports two operating modes:
 
-- **Demo mode:** Produces synthetic detection streams in the browser without requiring external hardware or Python servers. It simulates periodic worker visits cycling through clear, approach countdown, inside intrusion, and departure phases. All synthetic data is clearly labelled with a `SIMULATED DATA` badge in the header and a `SIMULATED` label on the radar scope. Controls are provided in the source bar to simulate entries and pause/resume the feed.
+- **Demo mode:** Produces synthetic detection streams in the browser without requiring external hardware or Python servers. It simulates periodic worker visits cycling through clear, approach countdown, inside intrusion, and departure phases. All synthetic data is clearly labelled with a `SIMULATED DATA` badge in the header and a `SIMULATED` label on the zone map. Controls are provided in the source bar to simulate entries and pause/resume the feed.
 - **Live mode:** Connects to an external WebSocket server (either Team A's CSI detector daemon or the included mock server) to display real-time sensor measurements.
 
 The active mode can be toggled via the mode switch in the top bar, or preset via the URL query parameter `?mode=live` or `?mode=demo`.
@@ -106,8 +106,8 @@ python mock/mock_server.py
 Perrymeter operates as a perimeter safety fence:
 
 - **CLEAR:** Zone is secure. No motion detected near the perimeter.
-- **APPROACH:** A person has entered the outer radar detection field and is approaching the fence line. The radar scope displays a shrinking dashed distance ring and real-time distance countdown.
-- **ALERT:** An active intrusion has crossed into the protected work zone. The radar scope sweeps in alert color with expanding activity ripples.
+- **APPROACH:** A person has entered the outer radar detection field and is approaching the fence line. The triangle zone map highlights the approaching side and radar fan.
+- **ALERT:** An active intrusion has crossed into the protected work zone. The zone map highlights the crossed side in alert color with a pulsing glow, and retains alert status while the person remains inside.
 
 ### Arming and alarm audio
 
@@ -134,7 +134,7 @@ chromium --kiosk "http://localhost:4173/?kiosk=1&mode=live"
 
 In kiosk mode (`?kiosk=1`):
 - Controls and configuration panels (SourceBar, ModeSwitch, armed toggles, EventList, and StatusFooter) are hidden to maximize screen real estate.
-- Layout displays the radar scope on the left, zone card and strength/confidence metrics stacked on the right, and an activity graph across the bottom.
+- Layout displays the triangle zone map on the left, zone card and strength/confidence metrics stacked on the right, and an activity graph across the bottom.
 - Zero horizontal or vertical scrollbars.
 - Mouse cursor automatically hides after 3 seconds of inactivity and restores on movement.
 
