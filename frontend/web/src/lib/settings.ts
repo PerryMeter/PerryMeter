@@ -1,8 +1,13 @@
 export type Mode = 'demo' | 'live';
 
-const MODE_STORAGE_KEY = 'radarping.mode';
-const WS_URL_STORAGE_KEY = 'radarping.wsUrl';
-const ARMED_STORAGE_KEY = 'radarping.armed';
+const MODE_STORAGE_KEY = 'perrymeter.mode';
+const WS_URL_STORAGE_KEY = 'perrymeter.wsUrl';
+const ARMED_STORAGE_KEY = 'perrymeter.armed';
+
+const OLD_MODE_STORAGE_KEY = 'radarping.mode';
+const OLD_WS_URL_STORAGE_KEY = 'radarping.wsUrl';
+const OLD_ARMED_STORAGE_KEY = 'radarping.armed';
+
 const DEFAULT_MODE: Mode = 'demo';
 const DEFAULT_WS_URL = 'ws://localhost:8765';
 
@@ -18,12 +23,25 @@ function getSearchParam(key: string): string | null {
   }
 }
 
-function safeGetStorage(key: string): string | null {
+function safeGetMigratedStorage(newKey: string, oldKey: string): string | null {
   if (typeof window === 'undefined') {
     return null;
   }
   try {
-    return window.localStorage.getItem(key);
+    const val = window.localStorage.getItem(newKey);
+    if (val !== null) {
+      return val;
+    }
+    const oldVal = window.localStorage.getItem(oldKey);
+    if (oldVal !== null) {
+      try {
+        window.localStorage.setItem(newKey, oldVal);
+      } catch {
+        // Storage access blocked or quota exceeded
+      }
+      return oldVal;
+    }
+    return null;
   } catch {
     return null;
   }
@@ -46,7 +64,7 @@ export function getInitialMode(): Mode {
     return queryMode;
   }
 
-  const storedMode = safeGetStorage(MODE_STORAGE_KEY);
+  const storedMode = safeGetMigratedStorage(MODE_STORAGE_KEY, OLD_MODE_STORAGE_KEY);
   if (storedMode === 'demo' || storedMode === 'live') {
     return storedMode;
   }
@@ -64,7 +82,7 @@ export function getInitialWsUrl(): string {
     return queryWs.trim();
   }
 
-  const storedWs = safeGetStorage(WS_URL_STORAGE_KEY);
+  const storedWs = safeGetMigratedStorage(WS_URL_STORAGE_KEY, OLD_WS_URL_STORAGE_KEY);
   if (storedWs !== null && storedWs.trim().length > 0) {
     return storedWs.trim();
   }
@@ -86,7 +104,7 @@ export function isKioskMode(): boolean {
 }
 
 export function getInitialArmed(): boolean {
-  const stored = safeGetStorage(ARMED_STORAGE_KEY);
+  const stored = safeGetMigratedStorage(ARMED_STORAGE_KEY, OLD_ARMED_STORAGE_KEY);
   if (stored === '0') return false;
   if (stored === '1') return true;
   return true;

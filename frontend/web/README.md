@@ -1,8 +1,8 @@
-# RadarPing Web Dashboard
+# Perrymeter Web Dashboard
 
 ## 1. What this is
 
-RadarPing is a live safety fence dashboard for temporary work zones on construction sites. It visualizes fused Wi-Fi channel state information (CSI) disturbance detection and LD2410C radar proximity measurements streamed in real time over a WebSocket connection.
+Perrymeter is a live safety fence dashboard for temporary work zones on construction sites. It visualizes fused Wi-Fi channel state information (CSI) disturbance detection and LD2410C radar proximity measurements streamed in real time over a WebSocket connection.
 
 ## 2. Run it
 
@@ -103,7 +103,7 @@ python mock/mock_server.py
 
 ## 7. Zone mode
 
-RadarPing operates as a perimeter safety fence:
+Perrymeter operates as a perimeter safety fence:
 
 - **CLEAR:** Zone is secure. No motion detected near the perimeter.
 - **APPROACH:** A person has entered the outer radar detection field and is approaching the fence line. The radar scope displays a shrinking dashed distance ring and real-time distance countdown.

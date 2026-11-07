@@ -1,5 +1,18 @@
 export type AlertLevel = 'clear' | 'approach' | 'inside';
 
+export type LinkState = {
+  id: string;
+  motion: boolean;
+  strength: number;
+  rssi: number | null;
+  pps: number | null;
+};
+
+export type NodeState = {
+  id: string;
+  online: boolean;
+};
+
 export type Detection = {
   t: number;
   motion: boolean;
@@ -8,6 +21,8 @@ export type Detection = {
   receivedAt: number;
   alert: AlertLevel;
   distanceM: number | null;
+  links: LinkState[] | null;
+  nodes: NodeState[] | null;
 };
 
 export type ParseResult = {
@@ -96,6 +111,101 @@ function parseItem(item: unknown, receivedAt: number): Detection | null {
     distanceM = rawDistance;
   }
 
+  // links: optional array of link states
+  let links: LinkState[] | null = null;
+  if (Array.isArray(record.links)) {
+    const parsedLinks: LinkState[] = [];
+    const seenIds = new Set<string>();
+
+    for (const linkItem of record.links) {
+      if (
+        typeof linkItem !== 'object' ||
+        linkItem === null ||
+        Array.isArray(linkItem)
+      ) {
+        continue;
+      }
+      const lRec = linkItem as Record<string, unknown>;
+      if (typeof lRec.id !== 'string' || lRec.id.trim().length === 0) {
+        continue;
+      }
+      if (typeof lRec.motion !== 'boolean') {
+        continue;
+      }
+      if (typeof lRec.strength !== 'number' || !Number.isFinite(lRec.strength)) {
+        continue;
+      }
+      if (seenIds.has(lRec.id)) {
+        continue;
+      }
+      seenIds.add(lRec.id);
+
+      let rssi: number | null = null;
+      if (
+        typeof lRec.rssi === 'number' &&
+        Number.isFinite(lRec.rssi) &&
+        lRec.rssi >= -120 &&
+        lRec.rssi <= 0
+      ) {
+        rssi = lRec.rssi;
+      }
+
+      let pps: number | null = null;
+      if (
+        typeof lRec.pps === 'number' &&
+        Number.isFinite(lRec.pps) &&
+        lRec.pps >= 0
+      ) {
+        pps = lRec.pps;
+      }
+
+      parsedLinks.push({
+        id: lRec.id,
+        motion: lRec.motion,
+        strength: clamp01(lRec.strength),
+        rssi,
+        pps,
+      });
+    }
+
+    links = parsedLinks;
+  }
+
+  // nodes: optional array of node states
+  let nodes: NodeState[] | null = null;
+  if (Array.isArray(record.nodes)) {
+    const parsedNodes: NodeState[] = [];
+    const seenNodeIds = new Set<string>();
+
+    for (const nodeItem of record.nodes) {
+      if (
+        typeof nodeItem !== 'object' ||
+        nodeItem === null ||
+        Array.isArray(nodeItem)
+      ) {
+        continue;
+      }
+      const nRec = nodeItem as Record<string, unknown>;
+      if (typeof nRec.id !== 'string' || nRec.id.trim().length === 0) {
+        continue;
+      }
+      if (typeof nRec.online !== 'boolean') {
+        continue;
+      }
+      if (seenNodeIds.has(nRec.id)) {
+        continue;
+      }
+      seenNodeIds.add(nRec.id);
+
+      parsedNodes.push({
+        id: nRec.id,
+        online: nRec.online,
+      });
+    }
+
+    nodes = parsedNodes;
+  }
+
   return {
     t,
     motion: rawMotion,
@@ -104,6 +214,8 @@ function parseItem(item: unknown, receivedAt: number): Detection | null {
     receivedAt,
     alert,
     distanceM,
+    links,
+    nodes,
   };
 }
 

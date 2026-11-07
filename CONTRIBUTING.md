@@ -1,6 +1,6 @@
 # Contributing
 
-Simple workflow for a 5-person, 64-hour hackathon. Speed matters, but `main` should always run. Read [`project.md`](project.md) first.
+Simple workflow for the Perrymeter team (5 people, 64-hour hackathon). Speed matters, but `main` should always run. Read [`project.md`](project.md) first.
 
 ## Setup
 

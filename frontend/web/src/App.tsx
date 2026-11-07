@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ActivityGraph } from './components/ActivityGraph';
 import { EventList } from './components/EventList';
 import { MetricCard } from './components/MetricCard';
+import { NodesPanel } from './components/NodesPanel';
 import { RadarScope } from './components/RadarScope';
 import { SourceBar } from './components/SourceBar';
 import { StatusFooter } from './components/StatusFooter';
@@ -43,6 +44,8 @@ export default function App() {
     now,
     alert,
     distanceM,
+    links,
+    nodes,
     signalRef,
     simulateEntry,
     setPaused,
@@ -260,9 +263,15 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Column 3: Event List - Full height of row, scrolls inside itself */}
-              <div className="order-5 md:order-5 min-[1100px]:order-none h-full min-h-[160px] min-[1100px]:min-h-0 flex flex-col">
-                <EventList events={events} className="h-full" />
+              {/* Column 3: Nodes Panel + Event List */}
+              <div className="order-5 md:order-5 min-[1100px]:order-none h-full min-h-[300px] min-[1100px]:min-h-0 flex flex-col gap-3">
+                {/* When data stops, keep showing the last known nodes (dimmed by the panel) instead of "not reported". */}
+                <NodesPanel
+                  nodes={isFresh ? nodes : (latest?.nodes ?? null)}
+                  links={isFresh ? links : (latest?.links ?? null)}
+                  isFresh={isFresh}
+                />
+                <EventList events={events} className="flex-1 min-h-[180px]" />
               </div>
             </div>
           </div>

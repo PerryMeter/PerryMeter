@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AlertLevel, Detection } from '../lib/contract';
+import type { AlertLevel, Detection, LinkState, NodeState } from '../lib/contract';
 import { parseDetections } from '../lib/contract';
 import { DemoSource } from '../lib/demoSource';
 import type { LiveSourceStatus } from '../lib/liveSource';
@@ -21,6 +21,7 @@ export type DetectionEvent = {
   endAt: number | null;
   peak: number;
   armed: boolean;
+  side: string | null;
 };
 
 export type HistoryPoint = {
@@ -44,6 +45,8 @@ export type StreamState = {
   alert: AlertLevel | null;
   distanceM: number | null;
   armed: boolean;
+  links: LinkState[] | null;
+  nodes: NodeState[] | null;
 };
 
 export type SignalRefValue = {
@@ -52,6 +55,8 @@ export type SignalRefValue = {
   alert: AlertLevel;
   distanceM: number | null;
   isFresh: boolean;
+  links: LinkState[] | null;
+  nodes: NodeState[] | null;
 };
 
 export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
@@ -80,6 +85,8 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
     alert: 'clear',
     distanceM: null,
     isFresh: false,
+    links: null,
+    nodes: null,
   });
 
   // Source instances
@@ -101,6 +108,8 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
     alert: null,
     distanceM: null,
     armed,
+    links: null,
+    nodes: null,
   }));
 
   // Effect to manage data source: depends ONLY on [mode, url]
@@ -121,6 +130,8 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
       alert: 'clear',
       distanceM: null,
       isFresh: false,
+      links: null,
+      nodes: null,
     };
 
     const processRawMessage = (raw: string) => {
@@ -145,12 +156,25 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
         const wasInside = prevAlertRef.current === 'inside';
 
         if (isInside && !wasInside) {
+          let side: string | null = null;
+          if (detection.links !== null) {
+            const movingLink = detection.links.find((l) => l.motion);
+            if (movingLink) {
+              side = movingLink.id;
+            } else {
+              side = 'radar';
+            }
+          } else {
+            side = null;
+          }
+
           eventsRef.current = [
             {
               startAt: detection.receivedAt,
               endAt: null,
               peak: detection.strength,
               armed: armedRef.current,
+              side,
             },
             ...eventsRef.current,
           ].slice(0, 8);
@@ -185,6 +209,8 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
         signalRef.current.motion = detection.motion;
         signalRef.current.alert = detection.alert;
         signalRef.current.distanceM = detection.distanceM;
+        signalRef.current.links = detection.links;
+        signalRef.current.nodes = detection.nodes;
         signalRef.current.isFresh = true;
       }
     };
@@ -298,10 +324,14 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
         signalRef.current.motion = false;
         signalRef.current.alert = 'clear';
         signalRef.current.distanceM = null;
+        signalRef.current.links = null;
+        signalRef.current.nodes = null;
       }
 
       const activeAlert = isFresh && latestRef.current ? latestRef.current.alert : null;
       const activeDist = isFresh && latestRef.current ? latestRef.current.distanceM : null;
+      const activeLinks = isFresh && latestRef.current ? latestRef.current.links : null;
+      const activeNodes = isFresh && latestRef.current ? latestRef.current.nodes : null;
 
       setStreamState({
         latest: latestRef.current,
@@ -317,6 +347,8 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
         alert: activeAlert,
         distanceM: activeDist,
         armed: armedRef.current,
+        links: activeLinks,
+        nodes: activeNodes,
       });
     }, 100);
 

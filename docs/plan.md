@@ -1,33 +1,34 @@
-# RadarPing: Plan
+# Perrymeter: Plan
 
 The full, current plan is in [`../project.md`](../project.md). This page is the short version.
 
 ## Goal
 
-A portable, camera-free safety fence for temporary work zones (natHacks 2026, Construction & Manufacturing theme): two ESP32 boards on cones form a Wi-Fi tripwire that detects a person entering the zone, an LD2410C radar warns when someone approaches, and a live dashboard alerts the crew.
+A portable, camera-free safety perimeter for temporary work zones (natHacks 2026, Construction & Manufacturing theme): a **danger triangle** of three cones. Two Wi-Fi sides detect people crossing, an LD2410C radar at the top corner watches the inside, and a live dashboard alerts the crew and shows which side was crossed.
 
 ## Steps
 
-1. **Hardware:** new built-in-antenna ESP32 boards running Espressif's `esp-csi` sender and receiver; sender rate 50 packets/s; quietest channel at the demo spot.
-2. **Data:** labelled recordings at the venue (`empty`, `cross`, `approach`, `still`, `crowd`, `covered`).
-3. **Detection:** motion-to-noise ratio detector, calibrated on site, scored on held-out recordings.
-4. **Radar:** LD2410C read through a spare ESP32, giving approach warnings and distance.
-5. **Server:** one Python process fuses both into an alert level (clear, approach, inside) and serves it over WebSocket.
-6. **Dashboard:** zone status, arm/disarm, sound, radar animation, activity graph, event log.
-7. **Demo:** cones, a taped zone, live walk-in, the towel test, measured results.
+1. **Hardware:** hub (Pi, receiver ESP32, radar) and two node ESP32s with their own sender addresses, 30 packets per second each, on the quietest channel.
+2. **Data:** labelled recordings per side at the venue (`empty`, `cross-left`, `cross-right`, `inside-still`, `near`, `crowd`, `covered`).
+3. **Detection:** one motion-to-noise ratio detector per side, calibrated on site, scored on held-out recordings.
+4. **Radar:** inside presence and distance from the hub.
+5. **Server:** fuses the sides and the radar into an alert level and per-side detail, served over WebSocket.
+6. **Dashboard:** triangle map, zone status, node health, arm/disarm, sound, activity graph, event log.
+7. **Business:** monthly kit rental, expansion kits, worker tags (plans).
+8. **Demo:** three cones, a taped zone, live crossings per side, standing still inside, the towel test, measured results.
 
 ## Must have
 
-- Wi-Fi tripwire detecting a person entering, live on the dashboard.
+- At least one Wi-Fi side detecting a person crossing, live on the dashboard.
 - Measured detection and false-alarm rates.
-- A clear 15-minute presentation and a public repo with a README.
+- A clear 15-minute presentation including the business model, and a public repo with a README.
 
 ## Stretch
 
-- Radar approach warning with distance.
-- Second radar facing into the zone for people standing still.
-- Second tripwire for entering versus leaving.
+- Second side and per-side alerts.
+- Radar inside presence and distance.
 - Running on the Raspberry Pi with a kiosk screen.
+- Worker tag prototype.
 
 ## Deadline
 
