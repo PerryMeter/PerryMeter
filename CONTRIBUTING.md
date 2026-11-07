@@ -1,6 +1,6 @@
 # Contributing
 
-Simple workflow for a 5-person, 64-hour hackathon. Speed matters, but `main` should always run.
+Simple workflow for the Perrymeter team (5 people, 64-hour hackathon). Speed matters, but `main` should always run. Read [`project.md`](project.md) first.
 
 ## Setup
 
@@ -13,7 +13,7 @@ git clone https://github.com/isr808/RadarPing.git
 ## Branches
 
 - `main` is the demo-ready branch. Don't push to it directly.
-- Branch per task: `<area>/<short-desc>`, e.g. `firmware/csi-recv`, `processing/variance-detector`, `frontend/radar-sweep`.
+- Branch per task: `<area>/<short-desc>`, e.g. `processing/radar-reader`, `processing/ws-server`, `frontend/web-dashboard`, `docs/zone-safety`.
 - Keep branches short-lived; pull `main` often (`git pull --rebase origin main`).
 
 ## Pull requests

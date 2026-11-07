@@ -1,8 +1,10 @@
-# RadarPing 
+# Perrymeter
 
-natHacks 2026 project (5 people, 64 hours). ESP32 boards capture Wi-Fi **Channel State Information (CSI)**, a laptop detects human movement from changes in that signal, and a radar-style UI shows detections live, ideally through walls.
+**A portable, camera-free safety perimeter for temporary work zones.** Three traffic cones form a **danger triangle**: Wi-Fi signals between the cones act as invisible tripwires, and a 24 GHz radar at the top corner watches the inside, even for someone standing still. When a person crosses a side, Perrymeter tells the crew which side within about a second. It works through dust, mud and darkness, needs no tags, and records no video.
 
-> This repo is intentionally a skeleton. Per competition rules, all project code is written by the team during the official event window. See [`docs/plan.md`](docs/plan.md) for the full plan.
+natHacks 2026, Construction & Manufacturing theme. Team of 5, built during the 64-hour event (Nov 6 to 9, 2026). Formerly called RadarPing (the repository name).
+
+**Start with [`project.md`](project.md)**: the full guide to the idea, the triangle, detection, message format, dashboard, business model, demo and timeline.
 
 ## Getting the code
 
@@ -11,75 +13,60 @@ git clone https://github.com/isr808/RadarPing.git
 cd RadarPing
 ```
 
-## Architecture / data flow
+## How it works
 
 ```
- ┌──────────────┐  Wi-Fi   ┌──────────────┐  USB serial  ┌──────────────┐  CSI files /  ┌──────────────┐  WebSocket JSON  ┌──────────────┐
- │ ESP32 (TX)   │ ───────▶ │ ESP32 (RX)   │ ───────────▶ │ collection/  │ ────────────▶ │ processing/  │ ───────────────▶ │ frontend/    │
- │ sends pings  │  packets │ extracts CSI │  CSI lines   │ capture to   │  live stream  │ motion       │  detection msgs  │ radar UI     │
- └──────────────┘          └──────────────┘              │ data/        │               │ detection    │                  └──────────────┘
-      firmware/                firmware/                 └──────────────┘               └──────────────┘
+                    HUB cone: Raspberry Pi + receiver ESP32 + LD2410C radar
+                       /\
+       Wi-Fi tripwire /  \ Wi-Fi tripwire        radar watches the inside
+                     /    \
+       LEFT node cone /______\ RIGHT node cone   (ESP32 senders on power banks)
+
+  receiver ESP32 --USB--> processing/ (Python on the Pi)
+  radar ----------USB-->  per-side detection + radar -> alert: clear / approach / inside
+                                   | WebSocket, 10 messages/s
+                                   v
+                          frontend/web/ (dashboard in any browser)
 ```
 
-1. **firmware/**: one ESP32 transmits packets, another receives them and prints per-packet CSI over serial.
-2. **collection/**: laptop reads serial, timestamps lines, saves raw captures to `data/` and/or forwards them live.
-3. **processing/**: parses CSI, filters noise, computes a motion score, decides `detected`, publishes detection messages.
-4. **frontend/**: radar UI subscribes to detection messages and renders them in real time.
+1. **firmware/**: Espressif's `esp-csi` examples. Each node broadcasts small packets with its own sender address; the hub's receiver measures the Channel State Information (CSI) of each and prints it over USB.
+2. **collection/**: records CSI lines with timestamps and labels for tuning.
+3. **processing/**: scores how much each side's signal is disturbed compared with an empty-zone calibration, reads the radar, decides the alert level, and serves it over WebSocket.
+4. **frontend/web/**: live dashboard with a map of the triangle, zone status, strength and confidence, node health, a 60-second activity graph, an event log, and arm/disarm.
 
-The processing → frontend interface is defined in [`docs/detection-contract.md`](docs/detection-contract.md), so the frontend can be built against simulated data before detection works.
+The message format between `processing/` and the dashboard is in [`docs/detection-contract.md`](docs/detection-contract.md).
 
 ## Repo layout
 
 | Path | Purpose |
 |---|---|
-| `firmware/` | ESP32 firmware (ESP-IDF, CSI TX/RX) |
-| `collection/` | Serial CSI capture on the laptop (Python) |
-| `processing/` | Movement detection and the WebSocket publisher (Python) |
-| `frontend/` | Radar-style live UI |
-| `data/` | Raw captures (gitignored except its README) |
-| `docs/` | Plan, interface contract, notes |
+| `project.md` | Full project guide |
+| `firmware/` | ESP32 setup notes (Espressif `esp-csi` examples) |
+| `collection/` | CSI recorder |
+| `processing/` | Per-side detection, radar reader, WebSocket server |
+| `frontend/web/` | Dashboard (React, TypeScript, Vite) |
+| `frontend/pi_display/` | Earlier PySide6 prototype, not used |
+| `data/` | Recordings (gitignored except its README and captures list) |
+| `docs/` | Plan, message format, results |
 
-## How each part will run (planned)
+## Running it
 
-| Part | Expected command (to be confirmed once written) |
+| Part | Command |
 |---|---|
-| Firmware | `idf.py set-target esp32 && idf.py build flash monitor -p <PORT>` |
-| Collection | `python -m collection --port <PORT> --out data/<capture>.csv` |
-| Processing | `python -m processing --source <PORT or file> --ws-port 8765` |
-| Frontend | `npm install && npm run dev`, connects to `ws://localhost:8765` |
+| Firmware | `idf.py set-target esp32`, then `idf.py -p <PORT> flash monitor` in `csi_send` (each node with its own sender address) and `csi_recv` (see `project.md` section 5) |
+| Recorder | `python collection/record_csi.py <label> <seconds> --port <PORT> --out data/` |
+| Server | `python processing/server.py --csi <PORT>`, or replay recordings with `--csi data/<file>.csv --loop` (see `processing/README.md`) |
+| Dashboard | `cd frontend/web && npm install && npm run dev`, then open it with `?mode=live` to connect to `ws://localhost:8765` |
 
-Update this table as the real entry points land.
+The server currently handles one side; per-side detection for the triangle is next (see `project.md` section 10).
 
-## Team phases
+## Credits
 
-- **Phase 1 (all 5):** hardware setup and firmware (Step 1), collect and verify real CSI (Step 2).
-- **Phase 2:** Team A (3) builds signal processing and detection (Step 3). Team B (2) builds the radar UI against simulated detection messages (Step 4).
-- **Phase 3 (all 5):** integrate, test (including through-wall), tune accuracy, prepare the demo.
+- [Espressif `esp-csi`](https://github.com/espressif/esp-csi): the ESP32 sender and receiver firmware, used with the settings described in `project.md`.
+- Hi-Link LD2410C radar module and its published serial protocol.
+- Open-source libraries listed in each part's requirements and `package.json`.
 
-| Hours | Goal |
-|---|---|
-| 0–6 | Hardware setup and configuration |
-| 6–14 | Collect signals, basic movement detection |
-| 14–26 | Detection algorithm and frontend |
-| 26–40 | Integrate the complete system |
-| 40–52 | Improve accuracy, test through-wall |
-| 52–64 | Debug, polish, demo, submit |
-
-## Priorities
-
-**Must have**
-- ESP32 boards communicating
-- Real Wi-Fi CSI data collected
-- Working movement detection algorithm
-- Live interface showing detections
-
-**Stretch**
-- Through-wall detection
-- Approximate direction or position
-- Confidence levels
-- Alerts and improved physical design
-
-Reliable movement detection comes first. Accurate through-wall localization is a stretch.
+All other code was written by the team during the competition window.
 
 ## Contributing
 
