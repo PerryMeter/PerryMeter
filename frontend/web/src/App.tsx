@@ -265,7 +265,12 @@ export default function App() {
 
               {/* Column 3: Nodes Panel + Event List */}
               <div className="order-5 md:order-5 min-[1100px]:order-none h-full min-h-[300px] min-[1100px]:min-h-0 flex flex-col gap-3">
-                <NodesPanel nodes={nodes} links={links} isFresh={isFresh} />
+                {/* When data stops, keep showing the last known nodes (dimmed by the panel) instead of "not reported". */}
+                <NodesPanel
+                  nodes={isFresh ? nodes : (latest?.nodes ?? null)}
+                  links={isFresh ? links : (latest?.links ?? null)}
+                  isFresh={isFresh}
+                />
                 <EventList events={events} className="flex-1 min-h-[180px]" />
               </div>
             </div>

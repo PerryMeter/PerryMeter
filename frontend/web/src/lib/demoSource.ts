@@ -250,6 +250,10 @@ export class DemoSource {
         this.alert = 'clear';
         this.leftMotion = false;
         this.rightMotion = false;
+        // The person has left: drop the crossed side back to idle in this same message,
+        // so a CLEAR message never carries a crossing-level strength.
+        this.leftStrength = idleWalk(0.05);
+        this.rightStrength = idleWalk(0.05);
         this.timeUntilNextVisit = 10 + Math.random() * 10; // 10 to 20 s
       }
     }

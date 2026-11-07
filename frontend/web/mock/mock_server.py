@@ -185,7 +185,8 @@ async def broadcast_loop(rate: float, scenario: str, legacy: bool, offline: str 
 
                 time_until_tri_visit -= dt
                 if time_until_tri_visit <= 0.0:
-                    triangle_side = random.choice(["left", "right"])
+                    # Only use sides whose node is online, so every crossing is visible in `links`.
+                    triangle_side = random.choice([s for s in ("left", "right") if s != offline] or ["left"])
                     triangle_state = "near"
                     tri_phase_elapsed = 0.0
                     tri_phase_duration = random.uniform(1.5, 2.5)
@@ -296,6 +297,9 @@ async def broadcast_loop(rate: float, scenario: str, legacy: bool, offline: str 
                     alert = "clear"
                     left_motion = False
                     right_motion = False
+                    # The person has left: drop the crossed side back to idle in this same message.
+                    left_strength = left_idle
+                    right_strength = right_idle
                     print("triangle: clear", flush=True)
 
             motion = left_motion or right_motion
