@@ -11,7 +11,7 @@ export function EventList({ events, className }: EventListProps) {
 
   return (
     <div
-      className={`p-5 rounded-[10px] border border-line bg-surface flex flex-col min-h-0 flex-1 ${
+      className={`p-5 rounded-[10px] border border-line bg-surface flex flex-col min-h-0 ${
         className ?? ''
       }`}
     >
@@ -21,7 +21,7 @@ export function EventList({ events, className }: EventListProps) {
         </span>
       </div>
 
-      <div className="flex-1 overflow-y-auto space-y-1.5 font-mono text-[13px] pr-1">
+      <div className="flex-1 min-h-0 overflow-y-auto space-y-1.5 font-mono text-[13px] pr-1">
         {displayEvents.length === 0 ? (
           <p className="text-faint text-xs py-4 text-center">No movement yet</p>
         ) : (

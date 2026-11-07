@@ -97,7 +97,7 @@ export function MetricCard({
           </div>
         )}
 
-        <p className="text-xs text-muted font-mono leading-tight truncate">
+        <p className="text-xs text-muted font-mono leading-tight">
           {caption}
         </p>
       </div>
