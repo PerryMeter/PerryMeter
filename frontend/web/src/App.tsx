@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { EventList } from './components/EventList';
 import { MetricCard } from './components/MetricCard';
+import { RadarScope } from './components/RadarScope';
 import { SourceBar } from './components/SourceBar';
 import { StatusFooter } from './components/StatusFooter';
 import { TopBar } from './components/TopBar';
@@ -38,6 +39,7 @@ export default function App() {
     now,
     alert,
     distanceM,
+    signalRef,
     simulateEntry,
     setPaused,
   } = useDetectionStream(mode, wsUrl, armed);
@@ -122,19 +124,8 @@ export default function App() {
       {/* Main Content Area (Wide: 3 columns; Mobile/Tablet: vertical flow) */}
       <div className="flex-1 min-h-0 w-full my-2 min-[1100px]:[container-type:size]">
         <div className="flex flex-col gap-4 min-[1100px]:grid min-[1100px]:grid-cols-[min(100cqh,40cqw)_minmax(0,1.4fr)_minmax(0,1fr)] min-[1100px]:grid-rows-[minmax(0,1fr)] min-[1100px]:gap-4 min-[1100px]:h-full min-[1100px]:w-full min-[1100px]:items-stretch">
-          {/* Column 1: Radar Scope Placeholder */}
-          <div className="order-2 md:order-1 min-[1100px]:order-none relative flex items-center justify-center p-4 rounded-[10px] border border-line bg-surface aspect-square w-full h-full max-h-full max-w-[520px] min-[1100px]:max-w-none mx-auto min-[1100px]:m-0 min-h-0">
-            {mode === 'demo' && (
-              <span className="absolute top-3 right-3 font-mono text-[11px] text-warn uppercase tracking-wider">
-                SIMULATED
-              </span>
-            )}
-            <div className="text-center">
-              <span className="font-mono text-sm tracking-widest text-faint">
-                RADAR
-              </span>
-            </div>
-          </div>
+          {/* Column 1: Radar Scope */}
+          <RadarScope signalRef={signalRef} mode={mode} armed={armed} />
 
           {/* Column 2: Middle column - Zone Card + Metrics Row */}
           <div className="order-1 md:order-2 min-[1100px]:order-none flex flex-col gap-4 self-start w-full">
