@@ -26,6 +26,7 @@ dependencies.lock
 # Data captures (keep README)
 data/*
 !data/README.md
+!data/captures.md
 *.pcap
 
 # Env / OS / editors
