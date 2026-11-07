@@ -31,7 +31,18 @@ export function EventList({ events, className }: EventListProps) {
               ? 'ongoing'
               : formatDuration((evt.endAt! - evt.startAt) / 1000);
             const peakText = `peak ${Math.round(evt.peak * 100)}%`;
-            const entryLabel = evt.armed ? 'Entry' : 'Entry (disarmed)';
+
+            let entryLabel: string;
+            if (evt.side === 'radar') {
+              entryLabel = 'Entry (radar)';
+            } else if (evt.side) {
+              entryLabel = `Entry via ${evt.side}`;
+            } else {
+              entryLabel = 'Entry';
+            }
+            if (!evt.armed) {
+              entryLabel += ' (disarmed)';
+            }
 
             return (
               <div

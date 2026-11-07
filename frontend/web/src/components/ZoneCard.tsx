@@ -13,6 +13,7 @@ type ZoneCardProps = {
 };
 
 export function ZoneCard({
+  latest,
   events,
   alert,
   distanceM,
@@ -43,11 +44,12 @@ export function ZoneCard({
       valueColor = 'text-motion';
       const ongoingEvent =
         events.length > 0 && events[0].endAt === null ? events[0] : null;
+      const sideSuffix = ongoingEvent?.side ? `, entered via ${ongoingEvent.side}` : '';
       if (ongoingEvent) {
         const durationSec = Math.max(0, (now - ongoingEvent.startAt) / 1000);
-        captionText = `Person in zone for ${durationSec.toFixed(1)} s`;
+        captionText = `Person in zone for ${durationSec.toFixed(1)} s${sideSuffix}`;
       } else {
-        captionText = 'Person in zone';
+        captionText = `Person in zone${sideSuffix}`;
       }
       cardStyles = 'border-motion/60 animate-alert-glow';
       cardInlineStyle = {
@@ -58,7 +60,11 @@ export function ZoneCard({
       // APPROACH state
       valueText = 'APPROACH';
       valueColor = 'text-warn';
-      if (distanceM !== null) {
+      const activeLinks = latest?.links;
+      if (activeLinks && activeLinks.length > 0) {
+        const highestLink = [...activeLinks].sort((a, b) => b.strength - a.strength)[0];
+        captionText = `Someone near the ${highestLink.id} side`;
+      } else if (distanceM !== null) {
         captionText = `Someone approaching, ${distanceM.toFixed(1)} m from the fence`;
       } else {
         captionText = 'Someone approaching';

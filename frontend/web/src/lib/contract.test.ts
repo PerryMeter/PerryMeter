@@ -22,6 +22,8 @@ describe('parseDetections', () => {
         receivedAt: receiveTime,
         alert: 'inside',
         distanceM: null,
+        links: null,
+        nodes: null,
       },
     ]);
   });
@@ -67,6 +69,8 @@ describe('parseDetections', () => {
       receivedAt: receiveTime,
       alert: 'inside',
       distanceM: null,
+      links: null,
+      nodes: null,
     });
   });
 
@@ -169,6 +173,8 @@ describe('parseDetections', () => {
         receivedAt: receiveTime,
         alert: 'inside',
         distanceM: null,
+        links: null,
+        nodes: null,
       },
     ]);
   });
@@ -263,6 +269,136 @@ describe('parseDetections', () => {
       receivedAt: receiveTime,
       alert: 'inside',
       distanceM: null,
+      links: null,
+      nodes: null,
     });
+  });
+
+  // Section 18.2 Phase 11 test cases
+  it('parses valid links and nodes', () => {
+    const raw = JSON.stringify({
+      t: 1762450000.12,
+      motion: true,
+      strength: 0.81,
+      links: [
+        { id: 'left', motion: true, strength: 0.81, rssi: -58, pps: 27 },
+        { id: 'right', motion: false, strength: 0.05, rssi: -61, pps: 28 },
+      ],
+      nodes: [
+        { id: 'hub', online: true },
+        { id: 'left', online: true },
+        { id: 'right', online: false },
+        { id: 'radar', online: true },
+      ],
+    });
+    const result = parseDetections(raw, receiveTime);
+    expect(result.invalid).toBe(0);
+    expect(result.detections[0].links).toEqual([
+      { id: 'left', motion: true, strength: 0.81, rssi: -58, pps: 27 },
+      { id: 'right', motion: false, strength: 0.05, rssi: -61, pps: 28 },
+    ]);
+    expect(result.detections[0].nodes).toEqual([
+      { id: 'hub', online: true },
+      { id: 'left', online: true },
+      { id: 'right', online: false },
+      { id: 'radar', online: true },
+    ]);
+  });
+
+  it('skips a link without strength while other links stay', () => {
+    const raw = JSON.stringify({
+      t: 1762450000.12,
+      motion: false,
+      strength: 0.1,
+      links: [
+        { id: 'left', motion: false },
+        { id: 'right', motion: false, strength: 0.05 },
+      ],
+    });
+    const result = parseDetections(raw, receiveTime);
+    expect(result.invalid).toBe(0);
+    expect(result.detections[0].links).toEqual([
+      { id: 'right', motion: false, strength: 0.05, rssi: null, pps: null },
+    ]);
+  });
+
+  it('sets rssi to null when value is -150', () => {
+    const raw = JSON.stringify({
+      t: 1762450000.12,
+      motion: false,
+      strength: 0.1,
+      links: [{ id: 'left', motion: false, strength: 0.05, rssi: -150 }],
+    });
+    const result = parseDetections(raw, receiveTime);
+    expect(result.invalid).toBe(0);
+    expect(result.detections[0].links?.[0].rssi).toBeNull();
+  });
+
+  it('sets pps to null when value is -1', () => {
+    const raw = JSON.stringify({
+      t: 1762450000.12,
+      motion: false,
+      strength: 0.1,
+      links: [{ id: 'left', motion: false, strength: 0.05, pps: -1 }],
+    });
+    const result = parseDetections(raw, receiveTime);
+    expect(result.invalid).toBe(0);
+    expect(result.detections[0].links?.[0].pps).toBeNull();
+  });
+
+  it('skips a node with online: "yes"', () => {
+    const raw = JSON.stringify({
+      t: 1762450000.12,
+      motion: false,
+      strength: 0.1,
+      nodes: [
+        { id: 'left', online: 'yes' },
+        { id: 'hub', online: true },
+      ],
+    });
+    const result = parseDetections(raw, receiveTime);
+    expect(result.invalid).toBe(0);
+    expect(result.detections[0].nodes).toEqual([{ id: 'hub', online: true }]);
+  });
+
+  it('sets links to null when links is "left"', () => {
+    const raw = JSON.stringify({
+      t: 1762450000.12,
+      motion: false,
+      strength: 0.1,
+      links: 'left',
+    });
+    const result = parseDetections(raw, receiveTime);
+    expect(result.invalid).toBe(0);
+    expect(result.detections[0].links).toBeNull();
+  });
+
+  it('keeps the first when duplicate link id is present', () => {
+    const raw = JSON.stringify({
+      t: 1762450000.12,
+      motion: false,
+      strength: 0.1,
+      links: [
+        { id: 'left', motion: false, strength: 0.1 },
+        { id: 'left', motion: true, strength: 0.9 },
+      ],
+    });
+    const result = parseDetections(raw, receiveTime);
+    expect(result.invalid).toBe(0);
+    expect(result.detections[0].links).toHaveLength(1);
+    expect(result.detections[0].links?.[0].strength).toBe(0.1);
+    expect(result.detections[0].links?.[0].motion).toBe(false);
+  });
+
+  it('gives links: null and nodes: null for an older-format message', () => {
+    const raw = JSON.stringify({
+      t: 1762450000.12,
+      motion: false,
+      strength: 0.1,
+    });
+    const result = parseDetections(raw, receiveTime);
+    expect(result.invalid).toBe(0);
+    expect(result.detections[0].links).toBeNull();
+    expect(result.detections[0].nodes).toBeNull();
   });
 });

@@ -41,17 +41,18 @@ export function TopBar({
           height="18"
           fill="none"
           stroke="#3DD6B0"
-          strokeWidth="2"
-          strokeLinecap="round"
+          strokeWidth="1.75"
+          strokeLinejoin="round"
           className="shrink-0"
           aria-hidden="true"
         >
-          <path d="M 4 16 A 5 5 0 0 1 9 21" />
-          <path d="M 4 11 A 10 10 0 0 1 14 21" />
-          <path d="M 4 6 A 15 15 0 0 1 19 21" />
+          <polygon points="12,4 20,18 4,18" />
+          <circle cx="12" cy="4" r="2" fill="#3DD6B0" stroke="none" />
+          <circle cx="4" cy="18" r="2" fill="#3DD6B0" stroke="none" />
+          <circle cx="20" cy="18" r="2" fill="#3DD6B0" stroke="none" />
         </svg>
         <span className="font-semibold text-[18px] text-text tracking-tight">
-          RadarPing
+          Perrymeter
         </span>
         {!isKiosk && (
           <span className="text-muted text-xs hidden md:inline font-normal">
