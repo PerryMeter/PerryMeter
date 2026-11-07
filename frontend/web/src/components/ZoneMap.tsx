@@ -681,7 +681,7 @@ export function ZoneMap({ signalRef, mode, armed, className }: ZoneMapProps) {
       )}
       <canvas
         ref={canvasRef}
-        className="aspect-square max-w-full max-h-full block"
+        className="w-full h-full block"
         aria-label="Zone map display"
       />
     </div>

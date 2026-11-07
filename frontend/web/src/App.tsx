@@ -278,7 +278,8 @@ export default function App() {
 
           {/* Activity Graph */}
           <div className="w-full min-w-0 shrink-0">
-            <ActivityGraph history={history} now={now} isFresh={isFresh} className="min-w-0" />
+            {/* No className here: it would replace ActivityGraph's default height classes (the card already has min-w-0). */}
+            <ActivityGraph history={history} now={now} isFresh={isFresh} />
           </div>
 
           <StatusFooter
