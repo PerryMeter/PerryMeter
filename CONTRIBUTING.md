@@ -2,6 +2,14 @@
 
 Simple workflow for a 5-person, 64-hour hackathon. Speed matters, but `main` should always run.
 
+## Setup
+
+The repo lives on GitHub at [isr808/RadarPing](https://github.com/isr808/RadarPing):
+
+```bash
+git clone https://github.com/isr808/RadarPing.git
+```
+
 ## Branches
 
 - `main` is the demo-ready branch. Don't push to it directly.

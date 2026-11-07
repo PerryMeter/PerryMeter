@@ -4,6 +4,13 @@ natHacks 2026 project (5 people, 64 hours). ESP32 boards capture Wi-Fi **Channel
 
 > This repo is intentionally a skeleton. Per competition rules, all project code is written by the team during the official event window. See [`docs/plan.md`](docs/plan.md) for the full plan.
 
+## Getting the code
+
+```bash
+git clone https://github.com/isr808/RadarPing.git
+cd RadarPing
+```
+
 ## Architecture / data flow
 
 ```
