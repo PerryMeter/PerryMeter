@@ -3,7 +3,7 @@ import { ActivityGraph } from './components/ActivityGraph';
 import { EventList } from './components/EventList';
 import { MetricCard } from './components/MetricCard';
 import { NodesPanel } from './components/NodesPanel';
-import { RadarScope } from './components/RadarScope';
+import { ZoneMap } from './components/ZoneMap';
 import { SourceBar } from './components/SourceBar';
 import { StatusFooter } from './components/StatusFooter';
 import { TopBar } from './components/TopBar';
@@ -167,11 +167,11 @@ export default function App() {
       {isKiosk ? (
         /* KIOSK LAYOUT: 800x480 fit with no scrolling */
         <div className="flex-1 min-h-0 min-w-0 flex flex-col gap-2 my-1">
-          {/* Middle row: Radar on left, Cards on right */}
+          {/* Middle row: ZoneMap on left, Cards on right */}
           <div className="flex-1 min-h-0 min-w-0 flex items-stretch gap-3">
-            {/* Radar on left, sized to available height, stays square */}
+            {/* ZoneMap on left, sized to available height, stays square */}
             <div className="h-full aspect-square shrink-0">
-              <RadarScope
+              <ZoneMap
                 signalRef={signalRef}
                 mode={mode}
                 armed={armed}
@@ -229,8 +229,8 @@ export default function App() {
           {/* Main Content Area */}
           <div className="flex-1 min-h-0 w-full my-2 min-[1100px]:[container-type:size]">
             <div className="flex flex-col gap-4 min-[1100px]:grid min-[1100px]:grid-cols-[min(100cqh,40cqw)_minmax(0,1.4fr)_minmax(0,1fr)] min-[1100px]:grid-rows-[minmax(0,1fr)] min-[1100px]:gap-4 min-[1100px]:h-full min-[1100px]:w-full min-[1100px]:items-stretch">
-              {/* Column 1: Radar Scope */}
-              <RadarScope signalRef={signalRef} mode={mode} armed={armed} />
+              {/* Column 1: ZoneMap */}
+              <ZoneMap signalRef={signalRef} mode={mode} armed={armed} />
 
               {/* Column 2: Middle column - Zone Card + Metrics Row */}
               <div className="order-1 md:order-2 min-[1100px]:order-none flex flex-col gap-4 self-start w-full">
