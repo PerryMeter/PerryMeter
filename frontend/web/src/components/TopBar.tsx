@@ -12,6 +12,7 @@ type TopBarProps = {
   now: number;
   armed: boolean;
   soundOn: boolean;
+  isKiosk?: boolean;
   onModeChange: (mode: Mode) => void;
   onArmedChange: (armed: boolean) => void;
   onToggleSound: () => void;
@@ -25,12 +26,13 @@ export function TopBar({
   now,
   armed,
   soundOn,
+  isKiosk = false,
   onModeChange,
   onArmedChange,
   onToggleSound,
 }: TopBarProps) {
   return (
-    <header className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-line">
+    <header className="flex flex-wrap items-center justify-between gap-3 pb-2.5 border-b border-line shrink-0">
       {/* Brand logo & title */}
       <div className="flex items-center gap-2.5">
         <svg
@@ -51,65 +53,85 @@ export function TopBar({
         <span className="font-semibold text-[18px] text-text tracking-tight">
           RadarPing
         </span>
-        <span className="text-muted text-xs hidden md:inline font-normal">
-          Work zone safety monitor
-        </span>
+        {!isKiosk && (
+          <span className="text-muted text-xs hidden md:inline font-normal">
+            Work zone safety monitor
+          </span>
+        )}
       </div>
 
       {/* Controls & Status */}
       <div className="flex flex-wrap items-center gap-3">
-        <ModeSwitch mode={mode} onChange={onModeChange} />
+        {isKiosk ? (
+          <>
+            {mode === 'demo' && (
+              <span className="font-mono text-[10px] text-warn px-2 py-0.5 rounded-[4px] border border-warn/40 bg-warn/10 uppercase tracking-wider select-none">
+                SIMULATED DATA
+              </span>
+            )}
+            <LinkStatusPill
+              status={status}
+              retryInS={retryInS}
+              lastMessageAt={lastMessageAt}
+              now={now}
+            />
+          </>
+        ) : (
+          <>
+            <ModeSwitch mode={mode} onChange={onModeChange} />
 
-        {/* Armed / Disarmed switch */}
-        <div
-          role="group"
-          aria-label="Arm status"
-          className="inline-flex rounded-[6px] border border-line bg-surface p-0.5 text-xs font-medium"
-        >
-          <button
-            type="button"
-            aria-pressed={armed}
-            onClick={() => onArmedChange(true)}
-            className={`px-3 py-1 rounded-[4px] transition-colors ${
-              armed ? 'bg-surface-2 text-text' : 'text-muted hover:text-text'
-            }`}
-          >
-            Armed
-          </button>
-          <button
-            type="button"
-            aria-pressed={!armed}
-            onClick={() => onArmedChange(false)}
-            className={`px-3 py-1 rounded-[4px] transition-colors ${
-              !armed ? 'bg-surface-2 text-text' : 'text-muted hover:text-text'
-            }`}
-          >
-            Disarmed
-          </button>
-        </div>
+            {/* Armed / Disarmed switch */}
+            <div
+              role="group"
+              aria-label="Arm status"
+              className="inline-flex rounded-[6px] border border-line bg-surface p-0.5 text-xs font-medium"
+            >
+              <button
+                type="button"
+                aria-pressed={armed}
+                onClick={() => onArmedChange(true)}
+                className={`px-3 py-1 rounded-[4px] transition-colors ${
+                  armed ? 'bg-surface-2 text-text' : 'text-muted hover:text-text'
+                }`}
+              >
+                Armed
+              </button>
+              <button
+                type="button"
+                aria-pressed={!armed}
+                onClick={() => onArmedChange(false)}
+                className={`px-3 py-1 rounded-[4px] transition-colors ${
+                  !armed ? 'bg-surface-2 text-text' : 'text-muted hover:text-text'
+                }`}
+              >
+                Disarmed
+              </button>
+            </div>
 
-        {/* Sound button */}
-        <button
-          type="button"
-          onClick={onToggleSound}
-          className={`px-3 py-1 rounded-[6px] border border-line-strong text-xs font-medium transition-colors ${
-            soundOn
-              ? 'bg-surface-2 text-text border-accent'
-              : 'bg-surface text-text hover:bg-surface-2'
-          }`}
-        >
-          {soundOn ? 'Sound off' : 'Sound on'}
-        </button>
+            {/* Sound button */}
+            <button
+              type="button"
+              onClick={onToggleSound}
+              className={`px-3 py-1 rounded-[6px] border border-line-strong text-xs font-medium transition-colors ${
+                soundOn
+                  ? 'bg-surface-2 text-text border-accent'
+                  : 'bg-surface text-text hover:bg-surface-2'
+              }`}
+            >
+              {soundOn ? 'Sound off' : 'Sound on'}
+            </button>
 
-        <LinkStatusPill
-          status={status}
-          retryInS={retryInS}
-          lastMessageAt={lastMessageAt}
-          now={now}
-        />
-        <span className="font-mono text-xs text-muted hidden md:inline tabular-nums">
-          {formatClock(now)}
-        </span>
+            <LinkStatusPill
+              status={status}
+              retryInS={retryInS}
+              lastMessageAt={lastMessageAt}
+              now={now}
+            />
+            <span className="font-mono text-xs text-muted hidden md:inline tabular-nums">
+              {formatClock(now)}
+            </span>
+          </>
+        )}
       </div>
     </header>
   );

@@ -81,9 +81,9 @@ export function ZoneCard({
 
   return (
     <div
-      className={`p-5 rounded-[10px] border flex flex-col justify-between transition-colors duration-200 ${cardStyles} ${
-        className ?? ''
-      }`}
+      className={`rounded-[10px] border flex flex-col justify-between transition-colors duration-200 ${
+        className?.includes('p-') ? '' : 'p-5'
+      } ${cardStyles} ${className ?? ''}`}
       style={cardInlineStyle}
     >
       <div className="flex items-center justify-between">

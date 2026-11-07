@@ -7,6 +7,7 @@ export interface RadarScopeProps {
   signalRef: React.RefObject<SignalRefValue>;
   mode: Mode;
   armed: boolean;
+  className?: string;
 }
 
 interface ActivityRing {
@@ -24,7 +25,7 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${Math.max(0, Math.min(1, alpha)).toFixed(3)})`;
 }
 
-export function RadarScope({ signalRef, mode, armed }: RadarScopeProps) {
+export function RadarScope({ signalRef, mode, armed, className }: RadarScopeProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -398,7 +399,10 @@ export function RadarScope({ signalRef, mode, armed }: RadarScopeProps) {
   return (
     <div
       ref={containerRef}
-      className="order-2 md:order-1 min-[1100px]:order-none relative flex items-center justify-center p-4 rounded-[10px] border border-line bg-surface aspect-square w-full h-full max-h-full max-w-[520px] min-[1100px]:max-w-none mx-auto min-[1100px]:m-0 min-h-0 overflow-hidden"
+      className={`relative flex items-center justify-center rounded-[10px] border border-line bg-surface aspect-square overflow-hidden ${
+        className ??
+        'order-2 md:order-1 min-[1100px]:order-none p-4 w-full h-full max-h-full max-w-[520px] min-[1100px]:max-w-none mx-auto min-[1100px]:m-0 min-h-0'
+      }`}
     >
       {mode === 'demo' && (
         <span className="absolute top-3 right-3 font-mono text-[11px] text-warn uppercase tracking-wider select-none pointer-events-none z-10">

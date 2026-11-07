@@ -105,10 +105,24 @@ export function ActivityGraph({
   className,
 }: ActivityGraphProps) {
   const chartData = useMemo(() => {
-    return history.map((pt) => ({
-      x: Number(((pt.at - now) / 1000).toFixed(2)),
-      strength: Math.round(pt.strength * 100),
-    }));
+    const data: { x: number; strength: number | null }[] = [];
+    for (let i = 0; i < history.length; i++) {
+      const pt = history[i];
+      if (i > 0) {
+        const prevPt = history[i - 1];
+        if (pt.at - prevPt.at > 1000) {
+          // Gap > 1s detected between points (e.g. after pause and resume)
+          // Insert null strength point between them to keep the gap visible
+          const gapX = Number(((prevPt.at + 50 - now) / 1000).toFixed(2));
+          data.push({ x: gapX, strength: null });
+        }
+      }
+      data.push({
+        x: Number(((pt.at - now) / 1000).toFixed(2)),
+        strength: Math.round(pt.strength * 100),
+      });
+    }
+    return data;
   }, [history, now]);
 
   const alertRuns = useMemo(() => {
@@ -117,8 +131,9 @@ export function ActivityGraph({
 
   return (
     <div
-      className={`rounded-[10px] border border-line bg-surface p-4 flex flex-col justify-between shrink-0 my-2 h-[140px] md:h-[160px] min-[1100px]:h-[clamp(140px,22vh,200px)] ${
-        className ?? ''
+      className={`rounded-[10px] border border-line bg-surface flex flex-col justify-between shrink-0 ${
+        className ??
+        'p-4 my-2 h-[140px] md:h-[160px] min-[1100px]:h-[clamp(140px,22vh,200px)]'
       }`}
     >
       <div className="flex items-center justify-between text-xs mb-1 shrink-0">

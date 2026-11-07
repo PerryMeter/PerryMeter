@@ -53,3 +53,8 @@ body {
     animation: none;
   }
 }
+
+html.cursor-none,
+html.cursor-none * {
+  cursor: none !important;
+}

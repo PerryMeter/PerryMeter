@@ -5,6 +5,7 @@ type MetricCardProps = {
   isFresh: boolean;
   lastMessageAt: number | null;
   now: number;
+  className?: string;
 };
 
 export function MetricCard({
@@ -14,6 +15,7 @@ export function MetricCard({
   isFresh,
   lastMessageAt,
   now,
+  className,
 }: MetricCardProps) {
   const isStrength = type === 'strength';
   const label = isStrength ? 'STRENGTH' : 'CONFIDENCE';
@@ -44,9 +46,9 @@ export function MetricCard({
 
   return (
     <div
-      className={`p-5 rounded-[10px] border border-line bg-surface flex flex-col justify-between transition-opacity duration-200 ${
-        !isFresh ? 'opacity-40' : 'opacity-100'
-      }`}
+      className={`rounded-[10px] border border-line bg-surface flex flex-col justify-between transition-opacity duration-200 ${
+        className ?? 'p-5'
+      } ${!isFresh ? 'opacity-40' : 'opacity-100'}`}
     >
       <div className="flex items-center justify-between">
         <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted">
