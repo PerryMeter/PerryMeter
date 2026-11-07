@@ -28,6 +28,7 @@ async def broadcast_loop(rate: float, scenario: str, legacy: bool):
     # Zone scenario state
     zone_state = "clear"
     prev_zone_alert = "clear"
+    has_turned_inside = False
     time_until_visit = random.uniform(10.0, 20.0)
     approach_elapsed = 0.0
     approach_duration = 2.5
@@ -100,16 +101,18 @@ async def broadcast_loop(rate: float, scenario: str, legacy: bool):
 
                 if approach_elapsed >= approach_duration:
                     zone_state = "inside"
+                    has_turned_inside = False
                     in_episode = True
                     episode_elapsed = 0.0
                     episode_duration = random.uniform(3.0, 8.0)
                     episode_peak = random.uniform(0.55, 0.95)
                     episode_start_strength = strength
-                    distance_m = None
+                    alert = "approach"
+                    if distance_m is None:
+                        distance_m = 1.0
 
             elif zone_state == "inside":
                 episode_elapsed += dt
-                distance_m = None
                 rise_duration = 0.8
                 fall_duration = 1.2
 
@@ -131,11 +134,22 @@ async def broadcast_loop(rate: float, scenario: str, legacy: bool):
                 elif strength < 0.25:
                     motion = False
 
-                alert = "inside" if motion else "clear"
+                if motion:
+                    has_turned_inside = True
+                    alert = "inside"
+                    distance_m = None
+                elif not has_turned_inside:
+                    alert = "approach"
+                    if distance_m is None:
+                        distance_m = 1.0
+                else:
+                    alert = "clear"
+                    distance_m = None
 
                 if episode_elapsed >= episode_duration and not motion:
                     zone_state = "clear"
                     alert = "clear"
+                    distance_m = None
                     time_until_visit = random.uniform(10.0, 20.0)
 
             # Print changes in zone alert level

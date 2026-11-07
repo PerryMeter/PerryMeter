@@ -22,6 +22,7 @@ export class DemoSource {
   private approachDuration = 2.5;
 
   // Entry episode state
+  private hasTurnedInside = false;
   private episodeElapsed = 0;
   private episodeDuration = 5;
   private episodePeak = 0.75;
@@ -87,7 +88,10 @@ export class DemoSource {
 
   private startEntryEpisode(): void {
     this.demoState = 'entry';
-    this.distanceM = null;
+    this.hasTurnedInside = false;
+    // Until motion turns true, keep alert as 'approach' with the last distance (~1.0m)
+    this.alert = 'approach';
+    this.distanceM = this.distanceM !== null ? Number(Math.max(0.8, Math.min(1.5, this.distanceM)).toFixed(1)) : 1.0;
     this.episodeElapsed = 0;
     this.episodeDuration = 3 + Math.random() * 5; // 3 to 8 s
     this.episodePeak = 0.55 + Math.random() * 0.4;
@@ -137,7 +141,6 @@ export class DemoSource {
       }
     } else if (this.demoState === 'entry') {
       this.episodeElapsed += dt;
-      this.distanceM = null;
 
       const riseDuration = 0.8;
       const fallDuration = 1.2;
@@ -170,12 +173,27 @@ export class DemoSource {
         this.motion = false;
       }
 
-      this.alert = this.motion ? 'inside' : 'clear';
+      if (this.motion) {
+        this.hasTurnedInside = true;
+        this.alert = 'inside';
+        this.distanceM = null;
+      } else if (!this.hasTurnedInside) {
+        // Until motion first turns true, keep alert as 'approach' with the last distance
+        this.alert = 'approach';
+        if (this.distanceM === null) {
+          this.distanceM = 1.0;
+        }
+      } else {
+        // After motion turns false
+        this.alert = 'clear';
+        this.distanceM = null;
+      }
 
       // After episode duration and motion has fallen back to false
       if (this.episodeElapsed >= this.episodeDuration && !this.motion) {
         this.demoState = 'clear';
         this.alert = 'clear';
+        this.distanceM = null;
         this.timeUntilNextVisit = 10 + Math.random() * 10; // 10 to 20 s
       }
     }

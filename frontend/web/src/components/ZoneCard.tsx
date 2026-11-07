@@ -49,11 +49,10 @@ export function ZoneCard({
       } else {
         captionText = 'Person in zone';
       }
-      cardStyles = 'border-motion/60 animate-[pulse_1.6s_ease-in-out_infinite]';
+      cardStyles = 'border-motion/60 animate-alert-glow';
       cardInlineStyle = {
         backgroundColor:
           'color-mix(in srgb, var(--color-motion) 6%, var(--color-surface))',
-        boxShadow: '0 0 20px rgba(255, 138, 61, 0.25)',
       };
     } else if (alert === 'approach') {
       // APPROACH state

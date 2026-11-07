@@ -201,13 +201,13 @@ describe('parseDetections', () => {
   it('derives alert when given alert: "INSIDE"', () => {
     const raw = JSON.stringify({
       t: 1762450000.12,
-      motion: true,
-      strength: 0.7,
+      motion: false,
+      strength: 0.1,
       alert: 'INSIDE',
     });
     const result = parseDetections(raw, receiveTime);
     expect(result.invalid).toBe(0);
-    expect(result.detections[0].alert).toBe('inside');
+    expect(result.detections[0].alert).toBe('clear');
   });
 
   it('derives alert from motion when alert is missing', () => {
