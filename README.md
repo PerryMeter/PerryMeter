@@ -1,4 +1,4 @@
-# RadarPing / RescuePing AI
+# RadarPing 
 
 natHacks 2026 project (5 people, 64 hours). ESP32 boards capture Wi-Fi **Channel State Information (CSI)**, a laptop detects human movement from changes in that signal, and a radar-style UI shows detections live, ideally through walls.
 
