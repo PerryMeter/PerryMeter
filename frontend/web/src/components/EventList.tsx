@@ -23,7 +23,7 @@ export function EventList({ events, className }: EventListProps) {
 
       <div className="flex-1 min-h-0 overflow-y-auto space-y-1.5 font-mono text-[13px] pr-1">
         {displayEvents.length === 0 ? (
-          <p className="text-faint text-xs py-4 text-center">No movement yet</p>
+          <p className="text-faint text-xs py-4 text-center">No entries yet</p>
         ) : (
           displayEvents.map((evt, index) => {
             const isOngoing = evt.endAt === null;
@@ -31,6 +31,7 @@ export function EventList({ events, className }: EventListProps) {
               ? 'ongoing'
               : formatDuration((evt.endAt! - evt.startAt) / 1000);
             const peakText = `peak ${Math.round(evt.peak * 100)}%`;
+            const entryLabel = evt.armed ? 'Entry' : 'Entry (disarmed)';
 
             return (
               <div
@@ -41,11 +42,13 @@ export function EventList({ events, className }: EventListProps) {
                   <span className="text-muted tabular-nums">
                     {formatClock(evt.startAt)}
                   </span>
-                  <span className="text-text">Movement</span>
+                  <span className="text-text">{entryLabel}</span>
                 </div>
                 <div className="flex items-center gap-4">
                   <span
-                    className={isOngoing ? 'text-motion font-medium' : 'text-muted tabular-nums'}
+                    className={
+                      isOngoing ? 'text-motion font-medium' : 'text-muted tabular-nums'
+                    }
                   >
                     {durationText}
                   </span>

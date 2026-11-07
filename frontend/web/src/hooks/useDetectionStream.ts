@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Detection } from '../lib/contract';
+import type { AlertLevel, Detection } from '../lib/contract';
 import { parseDetections } from '../lib/contract';
 import { DemoSource } from '../lib/demoSource';
 import type { LiveSourceStatus } from '../lib/liveSource';
@@ -20,12 +20,14 @@ export type DetectionEvent = {
   startAt: number;
   endAt: number | null;
   peak: number;
+  armed: boolean;
 };
 
 export type HistoryPoint = {
   at: number;
   strength: number;
   motion: boolean;
+  alert: AlertLevel;
 };
 
 export type StreamState = {
@@ -39,20 +41,31 @@ export type StreamState = {
   invalidCount: number;
   isFresh: boolean;
   now: number;
+  alert: AlertLevel | null;
+  distanceM: number | null;
+  armed: boolean;
 };
 
 export type SignalRefValue = {
   strength: number;
   motion: boolean;
+  alert: AlertLevel;
+  distanceM: number | null;
   isFresh: boolean;
 };
 
-export function useDetectionStream(mode: Mode, url: string) {
-  // Underlying state kept in refs for performance (sources may emit 100 Hz)
+export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
+  // Keep armed in a ref so changes do not restart sources
+  const armedRef = useRef(armed);
+  useEffect(() => {
+    armedRef.current = armed;
+  }, [armed]);
+
+  // Underlying state kept in refs for performance
   const latestRef = useRef<Detection | null>(null);
   const historyRef = useRef<HistoryPoint[]>([]);
   const eventsRef = useRef<DetectionEvent[]>([]);
-  const prevMotionRef = useRef(false);
+  const prevAlertRef = useRef<AlertLevel>('clear');
   const lastMessageAtRef = useRef<number | null>(null);
   const messageTimestampsRef = useRef<number[]>([]);
   const invalidCountRef = useRef(0);
@@ -64,6 +77,8 @@ export function useDetectionStream(mode: Mode, url: string) {
   const signalRef = useRef<SignalRefValue>({
     strength: 0,
     motion: false,
+    alert: 'clear',
+    distanceM: null,
     isFresh: false,
   });
 
@@ -83,6 +98,9 @@ export function useDetectionStream(mode: Mode, url: string) {
     invalidCount: 0,
     isFresh: false,
     now: Date.now(),
+    alert: null,
+    distanceM: null,
+    armed,
   }));
 
   // Effect to manage data source: depends ONLY on [mode, url]
@@ -91,13 +109,19 @@ export function useDetectionStream(mode: Mode, url: string) {
     latestRef.current = null;
     historyRef.current = [];
     eventsRef.current = [];
-    prevMotionRef.current = false;
+    prevAlertRef.current = 'clear';
     lastMessageAtRef.current = null;
     messageTimestampsRef.current = [];
     invalidCountRef.current = 0;
     retryInSRef.current = null;
     isDemoPausedRef.current = false;
-    signalRef.current = { strength: 0, motion: false, isFresh: false };
+    signalRef.current = {
+      strength: 0,
+      motion: false,
+      alert: 'clear',
+      distanceM: null,
+      isFresh: false,
+    };
 
     const processRawMessage = (raw: string) => {
       const receivedAt = Date.now();
@@ -113,19 +137,24 @@ export function useDetectionStream(mode: Mode, url: string) {
           at: detection.receivedAt,
           strength: detection.strength,
           motion: detection.motion,
+          alert: detection.alert,
         });
 
-        // Event tracking: immutable updates to events
-        if (detection.motion && !prevMotionRef.current) {
+        // Event tracking: starts when alert becomes 'inside', ends when it leaves 'inside'
+        const isInside = detection.alert === 'inside';
+        const wasInside = prevAlertRef.current === 'inside';
+
+        if (isInside && !wasInside) {
           eventsRef.current = [
             {
               startAt: detection.receivedAt,
               endAt: null,
               peak: detection.strength,
+              armed: armedRef.current,
             },
             ...eventsRef.current,
           ].slice(0, 8);
-        } else if (detection.motion && prevMotionRef.current) {
+        } else if (isInside && wasInside) {
           if (eventsRef.current.length > 0 && eventsRef.current[0].endAt === null) {
             const first = eventsRef.current[0];
             const newPeak = Math.max(first.peak, detection.strength);
@@ -136,7 +165,7 @@ export function useDetectionStream(mode: Mode, url: string) {
               ];
             }
           }
-        } else if (!detection.motion && prevMotionRef.current) {
+        } else if (!isInside && wasInside) {
           if (eventsRef.current.length > 0 && eventsRef.current[0].endAt === null) {
             const first = eventsRef.current[0];
             eventsRef.current = [
@@ -149,11 +178,13 @@ export function useDetectionStream(mode: Mode, url: string) {
             ];
           }
         }
-        prevMotionRef.current = detection.motion;
+        prevAlertRef.current = detection.alert;
 
         // Update signal ref immediately for radar
         signalRef.current.strength = detection.strength;
         signalRef.current.motion = detection.motion;
+        signalRef.current.alert = detection.alert;
+        signalRef.current.distanceM = detection.distanceM;
         signalRef.current.isFresh = true;
       }
     };
@@ -206,7 +237,7 @@ export function useDetectionStream(mode: Mode, url: string) {
           ? lastAt !== null && now - lastAt <= 2000
           : isSocketOpen && lastAt !== null && now - lastAt <= 2000;
 
-      // Fix 1 & 4: When data is no longer fresh, close any ongoing event immutably
+      // When data is no longer fresh, close any ongoing event immutably
       if (!isFresh) {
         if (eventsRef.current.length > 0 && eventsRef.current[0].endAt === null) {
           const first = eventsRef.current[0];
@@ -218,7 +249,7 @@ export function useDetectionStream(mode: Mode, url: string) {
             ...eventsRef.current.slice(1),
           ];
         }
-        prevMotionRef.current = false;
+        prevAlertRef.current = 'clear';
       }
 
       // Prune message timestamps to last 5s and calculate rate
@@ -265,7 +296,12 @@ export function useDetectionStream(mode: Mode, url: string) {
       signalRef.current.isFresh = isFresh;
       if (!isFresh) {
         signalRef.current.motion = false;
+        signalRef.current.alert = 'clear';
+        signalRef.current.distanceM = null;
       }
+
+      const activeAlert = isFresh && latestRef.current ? latestRef.current.alert : null;
+      const activeDist = isFresh && latestRef.current ? latestRef.current.distanceM : null;
 
       setStreamState({
         latest: latestRef.current,
@@ -278,6 +314,9 @@ export function useDetectionStream(mode: Mode, url: string) {
         invalidCount: invalidCountRef.current,
         isFresh,
         now,
+        alert: activeAlert,
+        distanceM: activeDist,
+        armed: armedRef.current,
       });
     }, 100);
 
@@ -292,6 +331,12 @@ export function useDetectionStream(mode: Mode, url: string) {
     }
   }, [mode]);
 
+  const simulateEntry = useCallback(() => {
+    if (mode === 'demo') {
+      demoSourceRef.current?.simulateEntry();
+    }
+  }, [mode]);
+
   const setPaused = useCallback((paused: boolean) => {
     if (mode === 'demo') {
       isDemoPausedRef.current = paused;
@@ -303,6 +348,7 @@ export function useDetectionStream(mode: Mode, url: string) {
     ...streamState,
     signalRef,
     triggerMovement,
+    simulateEntry,
     setPaused,
   };
 }

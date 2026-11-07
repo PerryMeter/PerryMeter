@@ -10,7 +10,11 @@ type TopBarProps = {
   retryInS: number | null;
   lastMessageAt: number | null;
   now: number;
+  armed: boolean;
+  soundOn: boolean;
   onModeChange: (mode: Mode) => void;
+  onArmedChange: (armed: boolean) => void;
+  onToggleSound: () => void;
 };
 
 export function TopBar({
@@ -19,7 +23,11 @@ export function TopBar({
   retryInS,
   lastMessageAt,
   now,
+  armed,
+  soundOn,
   onModeChange,
+  onArmedChange,
+  onToggleSound,
 }: TopBarProps) {
   return (
     <header className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-line">
@@ -44,13 +52,55 @@ export function TopBar({
           RadarPing
         </span>
         <span className="text-muted text-xs hidden md:inline font-normal">
-          Wi-Fi CSI motion monitor
+          Work zone safety monitor
         </span>
       </div>
 
       {/* Controls & Status */}
-      <div className="flex flex-wrap items-center gap-4">
+      <div className="flex flex-wrap items-center gap-3">
         <ModeSwitch mode={mode} onChange={onModeChange} />
+
+        {/* Armed / Disarmed switch */}
+        <div
+          role="group"
+          aria-label="Arm status"
+          className="inline-flex rounded-[6px] border border-line bg-surface p-0.5 text-xs font-medium"
+        >
+          <button
+            type="button"
+            aria-pressed={armed}
+            onClick={() => onArmedChange(true)}
+            className={`px-3 py-1 rounded-[4px] transition-colors ${
+              armed ? 'bg-surface-2 text-text' : 'text-muted hover:text-text'
+            }`}
+          >
+            Armed
+          </button>
+          <button
+            type="button"
+            aria-pressed={!armed}
+            onClick={() => onArmedChange(false)}
+            className={`px-3 py-1 rounded-[4px] transition-colors ${
+              !armed ? 'bg-surface-2 text-text' : 'text-muted hover:text-text'
+            }`}
+          >
+            Disarmed
+          </button>
+        </div>
+
+        {/* Sound button */}
+        <button
+          type="button"
+          onClick={onToggleSound}
+          className={`px-3 py-1 rounded-[6px] border border-line-strong text-xs font-medium transition-colors ${
+            soundOn
+              ? 'bg-surface-2 text-text border-accent'
+              : 'bg-surface text-text hover:bg-surface-2'
+          }`}
+        >
+          {soundOn ? 'Sound off' : 'Sound on'}
+        </button>
+
         <LinkStatusPill
           status={status}
           retryInS={retryInS}

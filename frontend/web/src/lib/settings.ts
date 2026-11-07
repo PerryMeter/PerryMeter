@@ -2,6 +2,7 @@ export type Mode = 'demo' | 'live';
 
 const MODE_STORAGE_KEY = 'radarping.mode';
 const WS_URL_STORAGE_KEY = 'radarping.wsUrl';
+const ARMED_STORAGE_KEY = 'radarping.armed';
 const DEFAULT_MODE: Mode = 'demo';
 const DEFAULT_WS_URL = 'ws://localhost:8765';
 
@@ -82,4 +83,15 @@ export function saveWsUrl(url: string): void {
 
 export function isKioskMode(): boolean {
   return getSearchParam('kiosk') === '1';
+}
+
+export function getInitialArmed(): boolean {
+  const stored = safeGetStorage(ARMED_STORAGE_KEY);
+  if (stored === '0') return false;
+  if (stored === '1') return true;
+  return true;
+}
+
+export function saveArmed(armed: boolean): void {
+  safeSetStorage(ARMED_STORAGE_KEY, armed ? '1' : '0');
 }

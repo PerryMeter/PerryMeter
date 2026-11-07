@@ -1,9 +1,13 @@
+export type AlertLevel = 'clear' | 'approach' | 'inside';
+
 export type Detection = {
   t: number;
   motion: boolean;
   strength: number;
   confidence: number | null;
   receivedAt: number;
+  alert: AlertLevel;
+  distanceM: number | null;
 };
 
 export type ParseResult = {
@@ -68,12 +72,38 @@ function parseItem(item: unknown, receivedAt: number): Detection | null {
       ? clamp01(rawConfidence)
       : null;
 
+  // alert: exactly 'clear' | 'approach' | 'inside', otherwise derive from motion
+  let alert: AlertLevel;
+  if (
+    record.alert === 'clear' ||
+    record.alert === 'approach' ||
+    record.alert === 'inside'
+  ) {
+    alert = record.alert;
+  } else {
+    alert = rawMotion ? 'inside' : 'clear';
+  }
+
+  // distance_m: finite number 0..20, otherwise null
+  let distanceM: number | null = null;
+  const rawDistance = record.distance_m;
+  if (
+    typeof rawDistance === 'number' &&
+    Number.isFinite(rawDistance) &&
+    rawDistance >= 0 &&
+    rawDistance <= 20
+  ) {
+    distanceM = rawDistance;
+  }
+
   return {
     t,
     motion: rawMotion,
     strength: clamp01(rawStrength),
     confidence,
     receivedAt,
+    alert,
+    distanceM,
   };
 }
 

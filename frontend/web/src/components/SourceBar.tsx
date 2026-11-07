@@ -6,7 +6,7 @@ type SourceBarProps = {
   wsUrl: string;
   isPaused: boolean;
   retryInS: number | null;
-  onSimulateMovement: () => void;
+  onSimulateEntry: () => void;
   onTogglePause: () => void;
   onApplyWsUrl: (url: string) => void;
 };
@@ -16,7 +16,7 @@ export function SourceBar({
   wsUrl,
   isPaused,
   retryInS,
-  onSimulateMovement,
+  onSimulateEntry,
   onTogglePause,
   onApplyWsUrl,
 }: SourceBarProps) {
@@ -65,10 +65,10 @@ export function SourceBar({
           </span>
           <button
             type="button"
-            onClick={onSimulateMovement}
+            onClick={onSimulateEntry}
             className="px-3 py-1 rounded-[6px] border border-line-strong bg-surface text-text text-[13px] hover:bg-surface-2 focus:outline-none focus:ring-1 focus:ring-accent transition-colors"
           >
-            Simulate movement
+            Simulate entry
           </button>
           <button
             type="button"

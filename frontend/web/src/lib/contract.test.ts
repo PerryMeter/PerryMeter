@@ -20,6 +20,8 @@ describe('parseDetections', () => {
         strength: 0.74,
         confidence: 0.88,
         receivedAt: receiveTime,
+        alert: 'inside',
+        distanceM: null,
       },
     ]);
   });
@@ -43,7 +45,9 @@ describe('parseDetections', () => {
     expect(result.invalid).toBe(0);
     expect(result.detections).toHaveLength(2);
     expect(result.detections[0].motion).toBe(false);
+    expect(result.detections[0].alert).toBe('clear');
     expect(result.detections[1].motion).toBe(true);
+    expect(result.detections[1].alert).toBe('inside');
   });
 
   it('accepts each alias: timestamp for t, detected for motion, motion_score for strength', () => {
@@ -61,6 +65,8 @@ describe('parseDetections', () => {
       strength: 0.65,
       confidence: null,
       receivedAt: receiveTime,
+      alert: 'inside',
+      distanceM: null,
     });
   });
 
@@ -161,6 +167,8 @@ describe('parseDetections', () => {
         strength: 0.6,
         confidence: 0.75,
         receivedAt: receiveTime,
+        alert: 'inside',
+        distanceM: null,
       },
     ]);
   });
@@ -173,5 +181,88 @@ describe('parseDetections', () => {
     const result = parseDetections(raw, receiveTime);
     expect(result.invalid).toBe(0);
     expect(result.detections[0].t).toBe(receiveTime / 1000);
+  });
+
+  // Section 17.1 new test cases
+  it('parses valid alert: "approach" with distance_m: 2.3', () => {
+    const raw = JSON.stringify({
+      t: 1762450000.12,
+      motion: false,
+      strength: 0.08,
+      alert: 'approach',
+      distance_m: 2.3,
+    });
+    const result = parseDetections(raw, receiveTime);
+    expect(result.invalid).toBe(0);
+    expect(result.detections[0].alert).toBe('approach');
+    expect(result.detections[0].distanceM).toBe(2.3);
+  });
+
+  it('derives alert when given alert: "INSIDE"', () => {
+    const raw = JSON.stringify({
+      t: 1762450000.12,
+      motion: true,
+      strength: 0.7,
+      alert: 'INSIDE',
+    });
+    const result = parseDetections(raw, receiveTime);
+    expect(result.invalid).toBe(0);
+    expect(result.detections[0].alert).toBe('inside');
+  });
+
+  it('derives alert from motion when alert is missing', () => {
+    const rawMotionTrue = JSON.stringify({
+      t: 1762450000.12,
+      motion: true,
+      strength: 0.8,
+    });
+    const resTrue = parseDetections(rawMotionTrue, receiveTime);
+    expect(resTrue.invalid).toBe(0);
+    expect(resTrue.detections[0].alert).toBe('inside');
+
+    const rawMotionFalse = JSON.stringify({
+      t: 1762450000.12,
+      motion: false,
+      strength: 0.1,
+    });
+    const resFalse = parseDetections(rawMotionFalse, receiveTime);
+    expect(resFalse.invalid).toBe(0);
+    expect(resFalse.detections[0].alert).toBe('clear');
+  });
+
+  it('sets distanceM to null for -1, "2", and 25', () => {
+    for (const badDist of [-1, '2', 25]) {
+      const raw = JSON.stringify({
+        t: 1762450000.12,
+        motion: false,
+        strength: 0.1,
+        distance_m: badDist,
+      });
+      const result = parseDetections(raw, receiveTime);
+      expect(result.invalid).toBe(0);
+      expect(result.detections[0].distanceM).toBeNull();
+    }
+  });
+
+  it('parses an older-format message giving derived alert and distanceM: null', () => {
+    const raw = JSON.stringify({
+      type: 'detection',
+      timestamp: 1762450000.5,
+      detected: true,
+      motion_score: 0.82,
+      confidence: 0.9,
+      source: 'rx1',
+    });
+    const result = parseDetections(raw, receiveTime);
+    expect(result.invalid).toBe(0);
+    expect(result.detections[0]).toEqual({
+      t: 1762450000.5,
+      motion: true,
+      strength: 0.82,
+      confidence: 0.9,
+      receivedAt: receiveTime,
+      alert: 'inside',
+      distanceM: null,
+    });
   });
 });

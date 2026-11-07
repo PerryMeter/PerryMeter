@@ -1,18 +1,30 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { EventList } from './components/EventList';
 import { MetricCard } from './components/MetricCard';
-import { MovementCard } from './components/MovementCard';
 import { SourceBar } from './components/SourceBar';
 import { StatusFooter } from './components/StatusFooter';
 import { TopBar } from './components/TopBar';
+import { ZoneCard } from './components/ZoneCard';
 import { useDetectionStream } from './hooks/useDetectionStream';
+import { ZoneAlarm } from './lib/alarm';
 import type { Mode } from './lib/settings';
-import { getInitialMode, getInitialWsUrl, saveMode, saveWsUrl } from './lib/settings';
+import {
+  getInitialArmed,
+  getInitialMode,
+  getInitialWsUrl,
+  saveArmed,
+  saveMode,
+  saveWsUrl,
+} from './lib/settings';
 
 export default function App() {
   const [mode, setModeState] = useState<Mode>(() => getInitialMode());
   const [wsUrl, setWsUrlState] = useState<string>(() => getInitialWsUrl());
+  const [armed, setArmedState] = useState<boolean>(() => getInitialArmed());
+  const [soundOn, setSoundOn] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+
+  const alarmRef = useRef<ZoneAlarm | null>(null);
 
   const {
     status,
@@ -24,14 +36,51 @@ export default function App() {
     retryInS,
     lastMessageAt,
     now,
-    triggerMovement,
+    alert,
+    distanceM,
+    simulateEntry,
     setPaused,
-  } = useDetectionStream(mode, wsUrl);
+  } = useDetectionStream(mode, wsUrl, armed);
+
+  // Initialize and clean up alarm instance
+  useEffect(() => {
+    const alarm = new ZoneAlarm();
+    alarmRef.current = alarm;
+    return () => {
+      alarm.destroy();
+      alarmRef.current = null;
+    };
+  }, []);
+
+  // Alarm playback rule: plays only while soundOn && armed && isFresh && alert === 'inside'
+  useEffect(() => {
+    if (!alarmRef.current) return;
+    if (soundOn && armed && isFresh && alert === 'inside') {
+      alarmRef.current.start();
+    } else {
+      alarmRef.current.stop();
+    }
+  }, [soundOn, armed, isFresh, alert]);
 
   const handleModeChange = (newMode: Mode) => {
     setModeState(newMode);
     saveMode(newMode);
     setIsPaused(false);
+  };
+
+  const handleArmedChange = (nextArmed: boolean) => {
+    setArmedState(nextArmed);
+    saveArmed(nextArmed);
+  };
+
+  const handleToggleSound = () => {
+    const nextSound = !soundOn;
+    setSoundOn(nextSound);
+    if (nextSound && alarmRef.current) {
+      alarmRef.current.init();
+    } else {
+      alarmRef.current?.stop();
+    }
   };
 
   const handleApplyWsUrl = (newUrl: string) => {
@@ -53,7 +102,11 @@ export default function App() {
         retryInS={retryInS}
         lastMessageAt={lastMessageAt}
         now={now}
+        armed={armed}
+        soundOn={soundOn}
         onModeChange={handleModeChange}
+        onArmedChange={handleArmedChange}
+        onToggleSound={handleToggleSound}
       />
 
       <SourceBar
@@ -61,7 +114,7 @@ export default function App() {
         wsUrl={wsUrl}
         isPaused={isPaused}
         retryInS={retryInS}
-        onSimulateMovement={triggerMovement}
+        onSimulateEntry={simulateEntry}
         onTogglePause={handleTogglePause}
         onApplyWsUrl={handleApplyWsUrl}
       />
@@ -83,11 +136,14 @@ export default function App() {
             </div>
           </div>
 
-          {/* Column 2: Middle column - Movement Card + Metrics Row */}
+          {/* Column 2: Middle column - Zone Card + Metrics Row */}
           <div className="order-1 md:order-2 min-[1100px]:order-none flex flex-col gap-4 self-start w-full">
-            <MovementCard
+            <ZoneCard
               latest={latest}
               events={events}
+              alert={alert}
+              distanceM={distanceM}
+              armed={armed}
               isFresh={isFresh}
               now={now}
             />
