@@ -115,7 +115,7 @@ export function useDetectionStream(mode: Mode, url: string) {
           motion: detection.motion,
         });
 
-        // Event tracking: new event when motion becomes true, end when false
+        // Event tracking: immutable updates to events
         if (detection.motion && !prevMotionRef.current) {
           eventsRef.current = [
             {
@@ -127,18 +127,26 @@ export function useDetectionStream(mode: Mode, url: string) {
           ].slice(0, 8);
         } else if (detection.motion && prevMotionRef.current) {
           if (eventsRef.current.length > 0 && eventsRef.current[0].endAt === null) {
-            eventsRef.current[0].peak = Math.max(
-              eventsRef.current[0].peak,
-              detection.strength,
-            );
+            const first = eventsRef.current[0];
+            const newPeak = Math.max(first.peak, detection.strength);
+            if (newPeak !== first.peak) {
+              eventsRef.current = [
+                { ...first, peak: newPeak },
+                ...eventsRef.current.slice(1),
+              ];
+            }
           }
         } else if (!detection.motion && prevMotionRef.current) {
           if (eventsRef.current.length > 0 && eventsRef.current[0].endAt === null) {
-            eventsRef.current[0].endAt = detection.receivedAt;
-            eventsRef.current[0].peak = Math.max(
-              eventsRef.current[0].peak,
-              detection.strength,
-            );
+            const first = eventsRef.current[0];
+            eventsRef.current = [
+              {
+                ...first,
+                endAt: detection.receivedAt,
+                peak: Math.max(first.peak, detection.strength),
+              },
+              ...eventsRef.current.slice(1),
+            ];
           }
         }
         prevMotionRef.current = detection.motion;
@@ -192,7 +200,26 @@ export function useDetectionStream(mode: Mode, url: string) {
     const timer = setInterval(() => {
       const now = Date.now();
       const lastAt = lastMessageAtRef.current;
-      const isFresh = lastAt !== null && now - lastAt <= 2000;
+      const isSocketOpen = liveStatusRef.current === 'open';
+      const isFresh =
+        mode === 'demo'
+          ? lastAt !== null && now - lastAt <= 2000
+          : isSocketOpen && lastAt !== null && now - lastAt <= 2000;
+
+      // Fix 1 & 4: When data is no longer fresh, close any ongoing event immutably
+      if (!isFresh) {
+        if (eventsRef.current.length > 0 && eventsRef.current[0].endAt === null) {
+          const first = eventsRef.current[0];
+          eventsRef.current = [
+            {
+              ...first,
+              endAt: lastAt ?? now,
+            },
+            ...eventsRef.current.slice(1),
+          ];
+        }
+        prevMotionRef.current = false;
+      }
 
       // Prune message timestamps to last 5s and calculate rate
       const cutoff5s = now - 5000;

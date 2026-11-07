@@ -12,6 +12,7 @@ export class DemoSource {
   private episodeElapsed = 0;
   private episodeDuration = 5;
   private episodePeak = 0.75;
+  private episodeStartStrength = 0.06;
   private timeUntilNextEpisode = 10;
 
   start(onMessage: (raw: string) => void): void {
@@ -37,10 +38,34 @@ export class DemoSource {
   }
 
   triggerMovement(): void {
-    this.inEpisode = true;
-    this.episodeElapsed = 0;
-    this.episodeDuration = 3 + Math.random() * 5; // 3 to 8 s
-    this.episodePeak = 0.55 + Math.random() * 0.40; // 0.55 to 0.95
+    const extension = 3 + Math.random() * 5; // 3 to 8 s
+    const targetPeak = 0.55 + Math.random() * 0.40; // 0.55 to 0.95
+
+    if (this.inEpisode) {
+      // Extend current episode
+      this.episodePeak = Math.max(this.episodePeak, targetPeak);
+      const fallDuration = 1.2;
+      const riseDuration = 0.8;
+
+      if (this.episodeElapsed > this.episodeDuration - fallDuration) {
+        // Was already falling, return to plateau
+        this.episodeElapsed = riseDuration;
+        this.episodeDuration = riseDuration + extension;
+      } else {
+        // Still rising or on plateau: ensure at least extension seconds remain
+        this.episodeDuration = Math.max(
+          this.episodeDuration,
+          this.episodeElapsed + extension,
+        );
+      }
+    } else {
+      // Start a new episode rising from current strength
+      this.inEpisode = true;
+      this.episodeElapsed = 0;
+      this.episodeDuration = extension;
+      this.episodePeak = Math.max(this.strength, targetPeak);
+      this.episodeStartStrength = this.strength;
+    }
   }
 
   private tick(): void {
@@ -52,7 +77,8 @@ export class DemoSource {
         this.triggerMovement();
       } else {
         // Slow random walk around 0.06 (range 0.02 to 0.16), step <= 0.02
-        const delta = (Math.random() * 2 - 1) * 0.02 + (0.06 - this.strength) * 0.1;
+        const delta =
+          (Math.random() * 2 - 1) * 0.02 + (0.06 - this.strength) * 0.1;
         this.strength = Math.max(0.02, Math.min(0.16, this.strength + delta));
       }
     }
@@ -67,7 +93,9 @@ export class DemoSource {
 
       if (this.episodeElapsed < riseDuration) {
         const progress = this.episodeElapsed / riseDuration;
-        baseStrength = 0.06 + (this.episodePeak - 0.06) * progress;
+        baseStrength =
+          this.episodeStartStrength +
+          (this.episodePeak - this.episodeStartStrength) * progress;
       } else if (this.episodeElapsed > this.episodeDuration - fallDuration) {
         const remaining = Math.max(0, this.episodeDuration - this.episodeElapsed);
         const progress = remaining / fallDuration;
@@ -98,7 +126,8 @@ export class DemoSource {
 
     // Confidence: high when far from threshold, lower near it
     const rawConf =
-      0.55 + 0.45 * Math.min(1, Math.abs(this.strength - 0.30) / 0.30) +
+      0.55 +
+      0.45 * Math.min(1, Math.abs(this.strength - 0.30) / 0.30) +
       (Math.random() * 2 - 1) * 0.03;
     const confidence = Math.max(0, Math.min(1, rawConf));
 

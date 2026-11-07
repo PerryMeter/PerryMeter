@@ -1,6 +1,6 @@
 export type LiveSourceStatus =
   | 'connecting'
-  | 'waiting'
+  | 'open'
   | 'disconnected'
   | 'invalid-url';
 
@@ -108,7 +108,7 @@ export class LiveSource {
       this.attempt = 0;
       this.isSchedulingReconnect = false;
       this.callbacks?.onRetryCountdown(null);
-      this.callbacks?.onStatusChange('waiting');
+      this.callbacks?.onStatusChange('open');
     };
 
     this.ws.onmessage = (event: MessageEvent) => {
