@@ -54,8 +54,8 @@ export class DemoSource {
     if (this.demoState === 'approach') {
       // While approaching, skip straight to the entry
       this.startEntryEpisode();
-    } else if (this.demoState === 'entry') {
-      // During entry, extend it as in section 5.1
+    } else if (this.demoState === 'entry' && (!this.hasTurnedInside || this.motion)) {
+      // During active entry, extend it as in section 5.1
       const extension = 3 + Math.random() * 5; // 3 to 8 s
       const targetPeak = 0.55 + Math.random() * 0.4; // 0.55 to 0.95
       this.episodePeak = Math.max(this.episodePeak, targetPeak);
@@ -72,7 +72,8 @@ export class DemoSource {
         );
       }
     } else {
-      // When clear, start a visit with a 1.5 s approach
+      // When clear (or entry ended with motion=false and hasTurnedInside=true),
+      // start a new visit with a 1.5 s approach
       this.demoState = 'approach';
       this.approachElapsed = 0;
       this.approachDuration = 1.5;

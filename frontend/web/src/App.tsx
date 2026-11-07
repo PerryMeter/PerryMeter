@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { ActivityGraph } from './components/ActivityGraph';
 import { EventList } from './components/EventList';
 import { MetricCard } from './components/MetricCard';
 import { RadarScope } from './components/RadarScope';
@@ -30,6 +31,7 @@ export default function App() {
   const {
     status,
     latest,
+    history,
     isFresh,
     messagesPerSecond,
     events,
@@ -165,18 +167,8 @@ export default function App() {
         </div>
       </div>
 
-      {/* Activity Graph Placeholder */}
-      <div className="rounded-[10px] border border-line bg-surface p-4 flex flex-col justify-between shrink-0 my-2 h-[140px] md:h-[160px] min-[1100px]:h-[clamp(140px,22vh,200px)]">
-        <div className="flex items-center justify-between text-xs">
-          <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted">
-            ACTIVITY
-          </span>
-          <span className="text-xs text-muted font-mono">Last 60 s</span>
-        </div>
-        <div className="flex-1 flex items-center justify-center">
-          <span className="font-mono text-xs text-faint">Waiting for data</span>
-        </div>
-      </div>
+      {/* Activity Graph */}
+      <ActivityGraph history={history} now={now} isFresh={isFresh} />
 
       <StatusFooter
         mode={mode}
