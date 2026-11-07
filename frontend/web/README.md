@@ -97,7 +97,7 @@ python mock/mock_server.py
 
 - `python mock/mock_server.py`: Standard baseline stream with intermittent motion visits.
 - `python mock/mock_server.py --scenario zone`: Simulates perimeter work-zone visits cycling through CLEAR, APPROACH with descending radar distance (5.5 m down to 1.0 m), and inside ALERT.
-- `python mock/mock_server.py --scenario chaos`: Stress-tests dashboard resilience with malformed JSON, out-of-range values, missing fields, rapid bursts, and 5-second silence gaps.
+- `python mock/mock_server.py --scenario chaos`: Stress-tests dashboard resilience with malformed JSON, out-of-range values, missing fields, an array of two messages in one frame, and a 5-second silence.
 - `python mock/mock_server.py --legacy`: Emits legacy field names (`timestamp`, `detected`, `motion_score`) without `alert` or `distance_m`.
 - `python mock/mock_server.py --port 9000`: Runs the mock server on an alternate port.
 
@@ -111,7 +111,7 @@ RadarPing operates as a perimeter safety fence:
 
 ### Arming and alarm audio
 
-- **Armed / Disarmed:** When armed, entries trigger amber alert card glowing and acoustic alarm beeps. When disarmed, entries are logged in the event table as `Entry (disarmed)` with muted styling and no audio.
+- **Armed / Disarmed:** When armed, an entry makes the zone card glow orange and, with sound on, plays an alarm. When disarmed, entries are logged in the event table as `Entry (disarmed)` with muted styling and no audio.
 - **Sound control:** Web browsers block audio synthesis until an explicit user gesture has occurred. Click **Sound on** in the top bar to enable the Web Audio synthesizer. Audio automatically silences on CLEAR, on disarm, on muting sound, or when sensor data goes stale.
 
 ## 8. Raspberry Pi kiosk
