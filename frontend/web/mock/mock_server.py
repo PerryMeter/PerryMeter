@@ -4,7 +4,7 @@ import json
 import math
 import random
 import time
-from websockets.asyncio.server import serve
+from websockets.asyncio.server import broadcast, serve
 
 clients = set()
 
@@ -16,6 +16,7 @@ def compute_confidence(strength: float) -> float:
 
 
 async def broadcast_loop(rate: float, scenario: str):
+    loop = asyncio.get_running_loop()
     dt = 1.0 / rate
 
     # Signal state
@@ -30,11 +31,19 @@ async def broadcast_loop(rate: float, scenario: str):
     episode_start_strength = 0.06
     time_until_next_episode = random.uniform(8.0, 20.0)
 
-    # Chaos timer
+    # Chaos state: cycle through 7 cases in fixed order every 10 s
     time_until_chaos = 10.0
+    chaos_step = 0
+
+    next_tick = loop.time()
 
     while True:
-        await asyncio.sleep(dt)
+        next_tick += dt
+        delay = next_tick - loop.time()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        else:
+            next_tick = loop.time()
 
         if scenario == "idle":
             delta = random.uniform(-0.02, 0.02) + (0.06 - strength) * 0.1
@@ -42,7 +51,6 @@ async def broadcast_loop(rate: float, scenario: str):
             motion = False
 
         elif scenario == "walk":
-            # Continuous movement, strength 0.5 to 0.95
             t = time.time()
             base = 0.72 + 0.15 * math.sin(2.0 * math.pi * 0.5 * t)
             wobble = 0.08 * math.sin(2.0 * math.pi * 1.7 * t) + random.uniform(-0.02, 0.02)
@@ -92,41 +100,42 @@ async def broadcast_loop(rate: float, scenario: str):
 
         confidence = compute_confidence(strength)
 
-        # Check if chaos event triggers
+        # Check if chaos event triggers (every 10s in fixed cycling order)
         if scenario == "chaos":
             time_until_chaos -= dt
             if time_until_chaos <= 0.0:
                 time_until_chaos = 10.0
-                chaos_type = random.randint(1, 7)
+                case_index = chaos_step % 7
+                chaos_step += 1
 
-                if chaos_type == 1:
-                    # Malformed JSON
+                if case_index == 0:
+                    print("chaos: malformed JSON", flush=True)
                     message_str = '{"motion": tru'
-                elif chaos_type == 2:
-                    # Missing strength
+                elif case_index == 1:
+                    print("chaos: missing strength", flush=True)
                     message_str = json.dumps({
                         "t": time.time(),
                         "motion": motion,
                         "confidence": round(confidence, 3),
                     })
-                elif chaos_type == 3:
-                    # strength: 1.7
+                elif case_index == 2:
+                    print("chaos: strength 1.7", flush=True)
                     message_str = json.dumps({
                         "t": time.time(),
                         "motion": motion,
                         "strength": 1.7,
                         "confidence": round(confidence, 3),
                     })
-                elif chaos_type == 4:
-                    # confidence: -0.2
+                elif case_index == 3:
+                    print("chaos: confidence -0.2", flush=True)
                     message_str = json.dumps({
                         "t": time.time(),
                         "motion": motion,
                         "strength": round(strength, 3),
                         "confidence": -0.2,
                     })
-                elif chaos_type == 5:
-                    # extra unknown fields
+                elif case_index == 4:
+                    print("chaos: extra unknown fields", flush=True)
                     message_str = json.dumps({
                         "t": time.time(),
                         "motion": motion,
@@ -135,8 +144,8 @@ async def broadcast_loop(rate: float, scenario: str):
                         "extra_field": "debug_data",
                         "raw_rssi": -42,
                     })
-                elif chaos_type == 6:
-                    # array of two valid messages
+                elif case_index == 5:
+                    print("chaos: array of two valid messages", flush=True)
                     now = time.time()
                     message_str = json.dumps([
                         {
@@ -153,16 +162,13 @@ async def broadcast_loop(rate: float, scenario: str):
                         },
                     ])
                 else:
-                    # silent for 5 s
+                    print("chaos: silent for 5 s", flush=True)
                     await asyncio.sleep(5.0)
+                    next_tick = loop.time()
                     continue
 
                 if clients:
-                    for client in list(clients):
-                        try:
-                            await client.send(message_str)
-                        except Exception:
-                            clients.discard(client)
+                    broadcast(clients, message_str)
                 continue
 
         # Standard message
@@ -175,11 +181,7 @@ async def broadcast_loop(rate: float, scenario: str):
         message_str = json.dumps(payload)
 
         if clients:
-            for client in list(clients):
-                try:
-                    await client.send(message_str)
-                except Exception:
-                    clients.discard(client)
+            broadcast(clients, message_str)
 
 
 async def handler(websocket):
@@ -206,11 +208,9 @@ async def main():
     )
     args = parser.parse_args()
 
-    asyncio.create_task(broadcast_loop(args.rate, args.scenario))
-
     async with serve(handler, args.host, args.port):
         print(f"Mock server listening on ws://{args.host}:{args.port} (scenario: {args.scenario}, rate: {args.rate} Hz)", flush=True)
-        await asyncio.get_running_loop().create_future()
+        await broadcast_loop(args.rate, args.scenario)
 
 
 if __name__ == "__main__":
