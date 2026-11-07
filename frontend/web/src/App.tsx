@@ -163,9 +163,9 @@ export default function App() {
 
       {isKiosk ? (
         /* KIOSK LAYOUT: 800x480 fit with no scrolling */
-        <div className="flex-1 min-h-0 flex flex-col justify-between my-2">
+        <div className="flex-1 min-h-0 min-w-0 flex flex-col gap-2 my-1">
           {/* Middle row: Radar on left, Cards on right */}
-          <div className="flex-1 min-h-0 flex items-stretch gap-3">
+          <div className="flex-1 min-h-0 min-w-0 flex items-stretch gap-3">
             {/* Radar on left, sized to available height, stays square */}
             <div className="h-full aspect-square shrink-0">
               <RadarScope
@@ -176,8 +176,8 @@ export default function App() {
               />
             </div>
 
-            {/* Right side: ZoneCard on top, Strength and Confidence side by side below */}
-            <div className="flex-1 min-w-0 h-full flex flex-col justify-between gap-2">
+            {/* Right side: ZoneCard on top, Strength and Confidence side by side below (stacked at top with 8px gap) */}
+            <div className="flex-1 min-w-0 h-full flex flex-col gap-2">
               <ZoneCard
                 latest={latest}
                 events={events}
@@ -186,9 +186,9 @@ export default function App() {
                 armed={armed}
                 isFresh={isFresh}
                 now={now}
-                className="p-3"
+                className="p-3 shrink-0"
               />
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-2 gap-2 shrink-0">
                 <MetricCard
                   type="strength"
                   value={latest?.strength ?? null}
@@ -211,12 +211,13 @@ export default function App() {
             </div>
           </div>
 
-          {/* Graph across bottom: 100px tall */}
+          {/* Graph across bottom: 110px tall card with 8px gap above */}
           <ActivityGraph
             history={history}
             now={now}
             isFresh={isFresh}
-            className="h-[100px] my-0 p-3 shrink-0"
+            isKiosk={true}
+            className="h-[110px] min-w-0 my-0 shrink-0"
           />
         </div>
       ) : (
@@ -267,7 +268,9 @@ export default function App() {
           </div>
 
           {/* Activity Graph */}
-          <ActivityGraph history={history} now={now} isFresh={isFresh} />
+          <div className="w-full min-w-0 shrink-0">
+            <ActivityGraph history={history} now={now} isFresh={isFresh} className="min-w-0" />
+          </div>
 
           <StatusFooter
             mode={mode}
