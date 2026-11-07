@@ -1,0 +1,116 @@
+import type { LinkStatus } from '../hooks/useDetectionStream';
+import { formatClock } from '../lib/format';
+import type { Mode } from '../lib/settings';
+import { LinkStatusPill } from './LinkStatusPill';
+import { ModeSwitch } from './ModeSwitch';
+
+type TopBarProps = {
+  mode: Mode;
+  status: LinkStatus;
+  retryInS: number | null;
+  lastMessageAt: number | null;
+  now: number;
+  armed: boolean;
+  soundOn: boolean;
+  onModeChange: (mode: Mode) => void;
+  onArmedChange: (armed: boolean) => void;
+  onToggleSound: () => void;
+};
+
+export function TopBar({
+  mode,
+  status,
+  retryInS,
+  lastMessageAt,
+  now,
+  armed,
+  soundOn,
+  onModeChange,
+  onArmedChange,
+  onToggleSound,
+}: TopBarProps) {
+  return (
+    <header className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-line">
+      {/* Brand logo & title */}
+      <div className="flex items-center gap-2.5">
+        <svg
+          viewBox="0 0 24 24"
+          width="18"
+          height="18"
+          fill="none"
+          stroke="#3DD6B0"
+          strokeWidth="2"
+          strokeLinecap="round"
+          className="shrink-0"
+          aria-hidden="true"
+        >
+          <path d="M 4 16 A 5 5 0 0 1 9 21" />
+          <path d="M 4 11 A 10 10 0 0 1 14 21" />
+          <path d="M 4 6 A 15 15 0 0 1 19 21" />
+        </svg>
+        <span className="font-semibold text-[18px] text-text tracking-tight">
+          RadarPing
+        </span>
+        <span className="text-muted text-xs hidden md:inline font-normal">
+          Work zone safety monitor
+        </span>
+      </div>
+
+      {/* Controls & Status */}
+      <div className="flex flex-wrap items-center gap-3">
+        <ModeSwitch mode={mode} onChange={onModeChange} />
+
+        {/* Armed / Disarmed switch */}
+        <div
+          role="group"
+          aria-label="Arm status"
+          className="inline-flex rounded-[6px] border border-line bg-surface p-0.5 text-xs font-medium"
+        >
+          <button
+            type="button"
+            aria-pressed={armed}
+            onClick={() => onArmedChange(true)}
+            className={`px-3 py-1 rounded-[4px] transition-colors ${
+              armed ? 'bg-surface-2 text-text' : 'text-muted hover:text-text'
+            }`}
+          >
+            Armed
+          </button>
+          <button
+            type="button"
+            aria-pressed={!armed}
+            onClick={() => onArmedChange(false)}
+            className={`px-3 py-1 rounded-[4px] transition-colors ${
+              !armed ? 'bg-surface-2 text-text' : 'text-muted hover:text-text'
+            }`}
+          >
+            Disarmed
+          </button>
+        </div>
+
+        {/* Sound button */}
+        <button
+          type="button"
+          onClick={onToggleSound}
+          className={`px-3 py-1 rounded-[6px] border border-line-strong text-xs font-medium transition-colors ${
+            soundOn
+              ? 'bg-surface-2 text-text border-accent'
+              : 'bg-surface text-text hover:bg-surface-2'
+          }`}
+        >
+          {soundOn ? 'Sound off' : 'Sound on'}
+        </button>
+
+        <LinkStatusPill
+          status={status}
+          retryInS={retryInS}
+          lastMessageAt={lastMessageAt}
+          now={now}
+        />
+        <span className="font-mono text-xs text-muted hidden md:inline tabular-nums">
+          {formatClock(now)}
+        </span>
+      </div>
+    </header>
+  );
+}
