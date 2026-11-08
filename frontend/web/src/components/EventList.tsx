@@ -33,10 +33,8 @@ export function EventList({ events, className }: EventListProps) {
             const peakText = `peak ${Math.round(evt.peak * 100)}%`;
 
             let entryLabel: string;
-            if (evt.side === 'radar') {
-              entryLabel = 'Entry (radar)';
-            } else if (evt.side) {
-              entryLabel = `Entry via ${evt.side}`;
+            if (evt.side) {
+              entryLabel = `Entry, ${evt.side} side active`;
             } else {
               entryLabel = 'Entry';
             }

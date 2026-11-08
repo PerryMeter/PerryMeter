@@ -77,6 +77,7 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
   const retryInSRef = useRef<number | null>(null);
   const liveStatusRef = useRef<LiveSourceStatus>('disconnected');
   const isDemoPausedRef = useRef(false);
+  const lastActiveSideRef = useRef<{ id: string; at: number } | null>(null);
 
   // Direct ref for radar canvas 60fps reads
   const signalRef = useRef<SignalRefValue>({
@@ -124,6 +125,7 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
     invalidCountRef.current = 0;
     retryInSRef.current = null;
     isDemoPausedRef.current = false;
+    lastActiveSideRef.current = null;
     signalRef.current = {
       strength: 0,
       motion: false,
@@ -151,21 +153,29 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
           alert: detection.alert,
         });
 
+        // Update memory of last active link
+        if (detection.links !== null) {
+          const movingLinks = detection.links.filter((l) => l.motion);
+          if (movingLinks.length > 0) {
+            const bestMoving = [...movingLinks].sort((a, b) => b.strength - a.strength)[0];
+            lastActiveSideRef.current = {
+              id: bestMoving.id,
+              at: detection.receivedAt,
+            };
+          }
+        }
+
         // Event tracking: starts when alert becomes 'inside', ends when it leaves 'inside'
         const isInside = detection.alert === 'inside';
         const wasInside = prevAlertRef.current === 'inside';
 
         if (isInside && !wasInside) {
           let side: string | null = null;
-          if (detection.links !== null) {
-            const movingLink = detection.links.find((l) => l.motion);
-            if (movingLink) {
-              side = movingLink.id;
-            } else {
-              side = 'radar';
-            }
-          } else {
-            side = null;
+          if (
+            lastActiveSideRef.current !== null &&
+            detection.receivedAt - lastActiveSideRef.current.at <= 5000
+          ) {
+            side = lastActiveSideRef.current.id;
           }
 
           eventsRef.current = [

@@ -41,12 +41,6 @@ function getSideMetres(): number {
   return 3;
 }
 
-function getNodeStroke(nodes: NodeState[] | null, id: string): string {
-  if (nodes === null) return theme.faint;
-  const n = nodes.find((item) => item.id === id);
-  if (!n) return theme.error;
-  return n.online ? theme.accent : theme.error;
-}
 
 function drawSide(
   ctx: CanvasRenderingContext2D,
@@ -63,15 +57,17 @@ function drawSide(
 ) {
   ctx.save();
 
-  // If links is null (older servers): idle style, but coloured by overall alert
-  if (links === null) {
+  // If nodes is null (older servers): idle style, but coloured by overall alert if links is null
+  if (nodes === null) {
     let color: string = theme.lineStrong;
-    if (armed) {
-      if (alert === 'inside') color = theme.motion;
-      else if (alert === 'approach') color = theme.warn;
-      else color = theme.accent;
-    } else {
-      color = theme.accent;
+    if (links === null) {
+      if (armed) {
+        if (alert === 'inside') color = theme.motion;
+        else if (alert === 'approach') color = theme.warn;
+        else color = theme.accent;
+      } else {
+        color = theme.accent;
+      }
     }
     ctx.setLineDash([]);
     ctx.lineWidth = 2;
@@ -84,11 +80,25 @@ function drawSide(
     return;
   }
 
-  const link = links.find((l) => l.id === sideId);
-  const node = nodes ? nodes.find((n) => n.id === sideId) : null;
+  const node = nodes.find((n) => n.id === sideId);
 
-  // That side's node offline, or its link missing while nodes is present: 2px dashed error at 70%
-  if (nodes !== null && ((node && !node.online) || !link)) {
+  // 19.1: Left or right side not installed (node not in nodes):
+  // 1.5px dashed faint, dashes 4px on and 4px off (the same as the bottom side),
+  // no glow, and it ignores links and alert.
+  if (!node) {
+    ctx.setLineDash([4, 4]);
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = theme.faint;
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
+  // 19.1: Offline (node in nodes, online === false): 2px dashed error at 70%
+  if (!node.online) {
     ctx.setLineDash([6, 6]);
     ctx.lineWidth = 2;
     ctx.strokeStyle = hexToRgba(theme.error, 0.70);
@@ -100,7 +110,10 @@ function drawSide(
     return;
   }
 
-  // If link is missing but nodes was null: idle
+  // Node is online! Check matching link
+  const link = links ? links.find((l) => l.id === sideId) : null;
+
+  // 19.1: Online but its link is missing from links: the idle style (2px line-strong), not red.
   if (!link) {
     ctx.setLineDash([]);
     ctx.lineWidth = 2;
@@ -127,7 +140,10 @@ function drawSide(
   }
 
   // Armed:
-  // Crossed (that link's motion true, armed): 3px motion with a glow, pulsing over 1.2 s
+  // 19.5: Active side colour:
+  // A link with motion: true now means activity at that side, so draw it in warn
+  // instead of motion: 3px warn, with the same glow (shadowBlur 12 to 24 scaled by
+  // the link's strength, reset right after) and the same 1.2 s pulse (none with reduced motion).
   if (link.motion) {
     if (isFresh) {
       const pulse = prefersReducedMotion
@@ -136,10 +152,10 @@ function drawSide(
       const clampedStrength = Math.min(1, Math.max(0, link.strength));
       const baseBlur = 12 + 12 * clampedStrength;
       const blur = Math.round(baseBlur * pulse);
-      ctx.shadowColor = theme.motion;
+      ctx.shadowColor = theme.warn;
       ctx.shadowBlur = blur;
     }
-    ctx.strokeStyle = theme.motion;
+    ctx.strokeStyle = theme.warn;
     ctx.lineWidth = 3;
     ctx.setLineDash([]);
     ctx.beginPath();
@@ -552,53 +568,88 @@ export function ZoneMap({ signalRef, mode, armed, className }: ZoneMapProps) {
       }
 
       // 6. Cones: a circle of radius 7 at each corner: fill bg, 2px stroke
-      // accent if online, error if offline, faint if nodes is null.
-      // Labels in 10px mono muted: HUB above apex (+ RADAR if radar node exists),
-      // LEFT below left corner, RIGHT below right corner.
+      // 19.1: not installed cone stroke faint, label faint; offline stroke error; online stroke accent
       const hasRadar = Boolean(nodes?.some((n) => n.id === 'radar'));
 
       // Hub cone
+      const hubNode = nodes ? nodes.find((n) => n.id === 'hub') : null;
+      let hubStroke: string = theme.faint;
+      if (nodes !== null) {
+        hubStroke = hubNode?.online ? theme.accent : theme.error;
+      }
       ctx.beginPath();
       ctx.arc(hub.x, hub.y, 7, 0, Math.PI * 2);
       ctx.fillStyle = theme.bg;
       ctx.fill();
       ctx.lineWidth = 2;
-      ctx.strokeStyle = getNodeStroke(nodes, 'hub');
+      ctx.strokeStyle = hubStroke;
       ctx.stroke();
 
-      // Left cone
+      // Left cone & label
+      const leftNode = nodes ? nodes.find((n) => n.id === 'left') : null;
+      let leftStroke: string = theme.faint;
+      let leftLabelColor: string = theme.muted;
+      if (nodes !== null) {
+        if (!leftNode) {
+          leftStroke = theme.faint;
+          leftLabelColor = theme.faint;
+        } else if (!leftNode.online) {
+          leftStroke = theme.error;
+          leftLabelColor = theme.muted;
+        } else {
+          leftStroke = theme.accent;
+          leftLabelColor = theme.muted;
+        }
+      }
       ctx.beginPath();
       ctx.arc(left.x, left.y, 7, 0, Math.PI * 2);
       ctx.fillStyle = theme.bg;
       ctx.fill();
       ctx.lineWidth = 2;
-      ctx.strokeStyle = getNodeStroke(nodes, 'left');
+      ctx.strokeStyle = leftStroke;
       ctx.stroke();
 
-      // Right cone
+      // Right cone & label
+      const rightNode = nodes ? nodes.find((n) => n.id === 'right') : null;
+      let rightStroke: string = theme.faint;
+      let rightLabelColor: string = theme.muted;
+      if (nodes !== null) {
+        if (!rightNode) {
+          rightStroke = theme.faint;
+          rightLabelColor = theme.faint;
+        } else if (!rightNode.online) {
+          rightStroke = theme.error;
+          rightLabelColor = theme.muted;
+        } else {
+          rightStroke = theme.accent;
+          rightLabelColor = theme.muted;
+        }
+      }
       ctx.beginPath();
       ctx.arc(right.x, right.y, 7, 0, Math.PI * 2);
       ctx.fillStyle = theme.bg;
       ctx.fill();
       ctx.lineWidth = 2;
-      ctx.strokeStyle = getNodeStroke(nodes, 'right');
+      ctx.strokeStyle = rightStroke;
       ctx.stroke();
 
       // Labels
       ctx.save();
       ctx.font = "10px 'IBM Plex Mono', monospace";
-      ctx.fillStyle = theme.muted;
       ctx.textAlign = 'center';
 
       // Hub label above apex
+      ctx.fillStyle = theme.muted;
       ctx.textBaseline = 'bottom';
       ctx.fillText(hasRadar ? 'HUB + RADAR' : 'HUB', hub.x, hub.y - 12);
 
       // Left label below left corner
+      ctx.fillStyle = leftLabelColor;
       ctx.textBaseline = 'top';
       ctx.fillText('LEFT', left.x, left.y + 12);
 
       // Right label below right corner
+      ctx.fillStyle = rightLabelColor;
       ctx.textBaseline = 'top';
       ctx.fillText('RIGHT', right.x, right.y + 12);
 

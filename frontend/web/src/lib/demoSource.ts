@@ -1,6 +1,6 @@
 import type { AlertLevel } from './contract';
 
-type DemoState = 'clear' | 'near' | 'crossing' | 'inside' | 'exit_crossing';
+type DemoState = 'clear' | 'activity' | 'inside_moving' | 'inside_still' | 'leaving';
 
 export class DemoSource {
   private intervalId: ReturnType<typeof setInterval> | null = null;
@@ -12,13 +12,14 @@ export class DemoSource {
   private visitSide: 'left' | 'right' = 'left';
   private phaseElapsed = 0;
   private phaseDuration = 0;
-  private insideExtension = 0;
+  private insideStillExtension = 0;
   private timeUntilNextVisit = 10 + Math.random() * 10; // 10 to 20 s
 
   private leftStrength = 0.05;
   private rightStrength = 0.05;
   private leftMotion = false;
   private rightMotion = false;
+  private radarLevel = 0.05;
   private alert: AlertLevel = 'clear';
   private distanceM: number | null = null;
 
@@ -46,47 +47,41 @@ export class DemoSource {
 
   simulateEntry(): void {
     if (this.demoState === 'clear') {
-      // When clear, start a visit with a 1 s near phase
+      // When clear, start a visit with a 1 s activity phase
       this.visitSide = Math.random() < 0.5 ? 'left' : 'right';
-      this.demoState = 'near';
+      this.demoState = 'activity';
       this.phaseElapsed = 0;
       this.phaseDuration = 1.0;
-      this.insideExtension = 0;
+      this.insideStillExtension = 0;
       this.distanceM = null;
       this.alert = 'approach';
       this.leftMotion = false;
       this.rightMotion = false;
-    } else if (this.demoState === 'near') {
-      // During the near phase, skip to the crossing
-      this.demoState = 'crossing';
+      this.radarLevel = 0.05;
+    } else if (this.demoState === 'activity') {
+      // During activity, skip to inside, moving
+      this.demoState = 'inside_moving';
       this.phaseElapsed = 0;
-      this.phaseDuration = 1.2;
-      this.distanceM = null;
+      this.phaseDuration = 2.5;
+      this.distanceM = 2.1;
       this.alert = 'inside';
-      if (this.visitSide === 'left') {
-        this.leftMotion = true;
-        this.leftStrength = 0.75;
-      } else {
-        this.rightMotion = true;
-        this.rightStrength = 0.75;
-      }
-    } else if (this.demoState === 'crossing') {
-      // During crossing phase, extend upcoming inside phase by 3 s
-      this.insideExtension += 3.0;
-    } else if (this.demoState === 'inside') {
-      // During inside phase, extend it by 3 s
+      this.radarLevel = 0.5;
+    } else if (this.demoState === 'inside_moving') {
+      // During either inside step, make the still step 3 s longer
+      this.insideStillExtension += 3.0;
+    } else if (this.demoState === 'inside_still') {
+      // During either inside step, make the still step 3 s longer
       this.phaseDuration += 3.0;
-    } else if (this.demoState === 'exit_crossing') {
-      // Re-enter inside phase with 3 s
-      this.demoState = 'inside';
+    } else if (this.demoState === 'leaving') {
+      // While leaving, go back to inside, still, for 3 s
+      this.demoState = 'inside_still';
       this.phaseElapsed = 0;
       this.phaseDuration = 3.0;
       this.alert = 'inside';
+      this.distanceM = this.distanceM ?? 2.0;
+      this.radarLevel = 0.05;
       this.leftMotion = false;
       this.rightMotion = false;
-      if (this.distanceM === null) {
-        this.distanceM = 1.8;
-      }
     }
   }
 
@@ -108,165 +103,211 @@ export class DemoSource {
       this.distanceM = null;
       this.leftMotion = false;
       this.rightMotion = false;
+      this.radarLevel = idleWalk(this.radarLevel);
       this.leftStrength = idleWalk(this.leftStrength);
       this.rightStrength = idleWalk(this.rightStrength);
 
       this.timeUntilNextVisit -= dt;
       if (this.timeUntilNextVisit <= 0) {
-        // Spontaneous visit: near 1.5 to 2.5 s
+        // Spontaneous visit: activity 1.5 to 2.5 s
         this.visitSide = Math.random() < 0.5 ? 'left' : 'right';
-        this.demoState = 'near';
+        this.demoState = 'activity';
         this.phaseElapsed = 0;
         this.phaseDuration = 1.5 + Math.random() * 1.0;
-        this.insideExtension = 0;
+        this.insideStillExtension = 0;
         this.distanceM = null;
         this.alert = 'approach';
+        this.leftMotion = false;
+        this.rightMotion = false;
+        this.radarLevel = 0.05;
       }
-    } else if (this.demoState === 'near') {
+    } else if (this.demoState === 'activity') {
       this.phaseElapsed += dt;
       this.alert = 'approach';
       this.distanceM = null;
-      this.leftMotion = false;
-      this.rightMotion = false;
+      this.radarLevel = idleWalk(this.radarLevel);
 
-      const progress = Math.min(1, this.phaseElapsed / this.phaseDuration);
-      const nearStrength = Math.min(
-        0.28,
-        0.05 + 0.20 * progress + (Math.random() * 2 - 1) * 0.015
-      );
-
-      if (this.visitSide === 'left') {
-        this.leftStrength = nearStrength;
-        this.rightStrength = idleWalk(this.rightStrength);
-      } else {
-        this.rightStrength = nearStrength;
-        this.leftStrength = idleWalk(this.leftStrength);
-      }
-
-      if (this.phaseElapsed >= this.phaseDuration) {
-        // Transition to crossing: about 1 to 1.5 s
-        this.demoState = 'crossing';
-        this.phaseElapsed = 0;
-        this.phaseDuration = 1.0 + Math.random() * 0.5;
-        this.alert = 'inside';
-        const crossStr = 0.55;
-        if (this.visitSide === 'left') {
-          this.leftStrength = crossStr;
-          this.leftMotion = true;
-        } else {
-          this.rightStrength = crossStr;
-          this.rightMotion = true;
-        }
-      }
-    } else if (this.demoState === 'crossing') {
-      this.phaseElapsed += dt;
-      this.alert = 'inside';
-      this.distanceM = null;
-
-      // Strength rises above 0.35 with wobble
       const p = Math.min(1, this.phaseElapsed / this.phaseDuration);
       const wobble =
         0.06 * Math.sin(2 * Math.PI * 1.7 * this.phaseElapsed) +
         (Math.random() * 2 - 1) * 0.02;
-      const crossingStrength = Math.max(
-        0.36,
-        Math.min(0.92, 0.55 + 0.25 * Math.sin(Math.PI * p) + wobble)
+      const activeStr = Math.max(
+        0.05,
+        Math.min(0.65, 0.05 + 0.48 * Math.sin(Math.PI * 0.5 * p) + wobble)
       );
 
       if (this.visitSide === 'left') {
-        this.leftStrength = crossingStrength;
-        this.leftMotion = this.leftStrength > 0.35 ? true : this.leftStrength < 0.25 ? false : this.leftMotion;
+        this.leftStrength = activeStr;
+        this.leftMotion =
+          this.leftStrength > 0.35
+            ? true
+            : this.leftStrength < 0.25
+            ? false
+            : this.leftMotion;
         this.rightStrength = idleWalk(this.rightStrength);
         this.rightMotion = false;
       } else {
-        this.rightStrength = crossingStrength;
-        this.rightMotion = this.rightStrength > 0.35 ? true : this.rightStrength < 0.25 ? false : this.rightMotion;
+        this.rightStrength = activeStr;
+        this.rightMotion =
+          this.rightStrength > 0.35
+            ? true
+            : this.rightStrength < 0.25
+            ? false
+            : this.rightMotion;
         this.leftStrength = idleWalk(this.leftStrength);
         this.leftMotion = false;
       }
 
       if (this.phaseElapsed >= this.phaseDuration) {
-        // Transition to inside: 2 to 5 s (+ any extension)
-        this.demoState = 'inside';
+        // Transition to inside, moving: 2 to 3 s
+        this.demoState = 'inside_moving';
         this.phaseElapsed = 0;
-        this.phaseDuration = (2.0 + Math.random() * 3.0) + this.insideExtension;
-        this.insideExtension = 0;
+        this.phaseDuration = 2.0 + Math.random() * 1.0;
+        this.alert = 'inside';
         this.distanceM = Number((1.2 + Math.random() * 1.6).toFixed(1)); // 1.0 to 3.0 m
+        this.radarLevel = 0.45 + Math.random() * 0.15; // 0.4 to 0.6
+      }
+    } else if (this.demoState === 'inside_moving') {
+      this.phaseElapsed += dt;
+      this.alert = 'inside';
+
+      // Drift distance by up to 0.05 per tick
+      if (this.distanceM !== null) {
+        const drift = (Math.random() * 2 - 1) * 0.04;
+        this.distanceM = Number(
+          Math.max(1.0, Math.min(3.0, this.distanceM + drift)).toFixed(1)
+        );
+      }
+
+      // Radar movement level 0.4 to 0.6
+      this.radarLevel = Math.max(
+        0.4,
+        Math.min(
+          0.6,
+          0.5 + 0.08 * Math.sin(2 * Math.PI * 1.5 * this.phaseElapsed) + (Math.random() * 2 - 1) * 0.02
+        )
+      );
+
+      // The side's link falls back to idle within 1 s
+      if (this.phaseElapsed <= 1.0) {
+        const fallP = this.phaseElapsed / 1.0;
+        const fallingStr = 0.5 * (1 - fallP) + 0.05 * fallP;
+        if (this.visitSide === 'left') {
+          this.leftStrength = fallingStr;
+          this.leftMotion =
+            this.leftStrength > 0.35
+              ? true
+              : this.leftStrength < 0.25
+              ? false
+              : this.leftMotion;
+          this.rightStrength = idleWalk(this.rightStrength);
+          this.rightMotion = false;
+        } else {
+          this.rightStrength = fallingStr;
+          this.rightMotion =
+            this.rightStrength > 0.35
+              ? true
+              : this.rightStrength < 0.25
+              ? false
+              : this.rightMotion;
+          this.leftStrength = idleWalk(this.leftStrength);
+          this.leftMotion = false;
+        }
+      } else {
+        this.leftMotion = false;
+        this.rightMotion = false;
+        this.leftStrength = idleWalk(this.leftStrength);
+        this.rightStrength = idleWalk(this.rightStrength);
+      }
+
+      if (this.phaseElapsed >= this.phaseDuration) {
+        // Transition to inside, still: 3 to 6 s (+ extension)
+        this.demoState = 'inside_still';
+        this.phaseElapsed = 0;
+        this.phaseDuration =
+          (3.0 + Math.random() * 3.0) + this.insideStillExtension;
+        this.insideStillExtension = 0;
         this.alert = 'inside';
         this.leftMotion = false;
         this.rightMotion = false;
       }
-    } else if (this.demoState === 'inside') {
+    } else if (this.demoState === 'inside_still') {
       this.phaseElapsed += dt;
-      // Alert STAYS 'inside' because of the radar
       this.alert = 'inside';
+      // Person stands still: distance stops drifting, radar level idle, motion false
+      this.radarLevel = idleWalk(this.radarLevel);
       this.leftMotion = false;
       this.rightMotion = false;
       this.leftStrength = idleWalk(this.leftStrength);
       this.rightStrength = idleWalk(this.rightStrength);
 
-      // Radar distance drifts by up to 0.05 per tick
-      if (this.distanceM !== null) {
-        const drift = (Math.random() * 2 - 1) * 0.04;
-        this.distanceM = Number(Math.max(1.0, Math.min(3.0, this.distanceM + drift)).toFixed(1));
-      }
-
       if (this.phaseElapsed >= this.phaseDuration) {
-        // Transition to exit crossing: about 1 s
-        this.demoState = 'exit_crossing';
+        // Transition to leaving: about 1.5 s
+        this.demoState = 'leaving';
         this.phaseElapsed = 0;
-        this.phaseDuration = 1.0;
-        this.alert = 'inside';
+        this.phaseDuration = 1.5;
+        this.alert = 'approach';
+        this.distanceM = null;
       }
-    } else if (this.demoState === 'exit_crossing') {
+    } else if (this.demoState === 'leaving') {
       this.phaseElapsed += dt;
-      this.alert = 'inside';
+      this.alert = 'approach';
+      this.distanceM = null;
+      this.radarLevel = idleWalk(this.radarLevel);
 
       const p = Math.min(1, this.phaseElapsed / this.phaseDuration);
       const wobble =
         0.06 * Math.sin(2 * Math.PI * 1.7 * this.phaseElapsed) +
         (Math.random() * 2 - 1) * 0.02;
-      const crossingStrength = Math.max(
+      const leavingStrength = Math.max(
         0.36,
-        Math.min(0.90, 0.50 + 0.28 * Math.sin(Math.PI * p) + wobble)
+        Math.min(0.6, 0.45 + 0.12 * Math.sin(Math.PI * p) + wobble)
       );
 
       if (this.visitSide === 'left') {
-        this.leftStrength = crossingStrength;
-        this.leftMotion = this.leftStrength > 0.35 ? true : this.leftStrength < 0.25 ? false : this.leftMotion;
+        this.leftStrength = leavingStrength;
+        this.leftMotion =
+          this.leftStrength > 0.35
+            ? true
+            : this.leftStrength < 0.25
+            ? false
+            : this.leftMotion;
         this.rightStrength = idleWalk(this.rightStrength);
         this.rightMotion = false;
       } else {
-        this.rightStrength = crossingStrength;
-        this.rightMotion = this.rightStrength > 0.35 ? true : this.rightStrength < 0.25 ? false : this.rightMotion;
+        this.rightStrength = leavingStrength;
+        this.rightMotion =
+          this.rightStrength > 0.35
+            ? true
+            : this.rightStrength < 0.25
+            ? false
+            : this.rightMotion;
         this.leftStrength = idleWalk(this.leftStrength);
         this.leftMotion = false;
       }
 
       if (this.phaseElapsed >= this.phaseDuration) {
-        // End of visit: distance becomes null, alert becomes clear
+        // Clear: alert clear, side drops to idle in this same message
         this.distanceM = null;
         this.demoState = 'clear';
         this.alert = 'clear';
         this.leftMotion = false;
         this.rightMotion = false;
-        // The person has left: drop the crossed side back to idle in this same message,
-        // so a CLEAR message never carries a crossing-level strength.
+        this.radarLevel = 0.05;
         this.leftStrength = idleWalk(0.05);
         this.rightStrength = idleWalk(0.05);
         this.timeUntilNextVisit = 10 + Math.random() * 10; // 10 to 20 s
       }
     }
 
-    const topMotion = this.leftMotion || this.rightMotion;
-    const topStrength = Math.max(this.leftStrength, this.rightStrength);
+    const isRadarMoving = this.demoState === 'inside_moving';
+    const topMotion = this.leftMotion || this.rightMotion || isRadarMoving;
+    const topStrength = Math.max(this.leftStrength, this.rightStrength, this.radarLevel);
 
-    // Confidence: high when far from threshold, lower near it
-    const rawConf =
-      0.55 +
-      0.45 * Math.min(1, Math.abs(topStrength - 0.3) / 0.3) +
-      (Math.random() * 2 - 1) * 0.03;
-    const confidence = Math.max(0, Math.min(1, rawConf));
+    const confidence = Math.min(
+      0.99,
+      Math.max(0.05, Number((topStrength * 1.05 + 0.04).toFixed(2)))
+    );
 
     if (this.paused) {
       return;
@@ -285,15 +326,15 @@ export class DemoSource {
             id: 'left',
             motion: this.leftMotion,
             strength: Number(this.leftStrength.toFixed(3)),
-            rssi: Math.round(-58 + (Math.random() * 2 - 1)),
-            pps: Math.round(27 + Math.random() * 2),
+            rssi: Math.round(-55 + (Math.random() * 2 - 1)),
+            pps: Math.round(68 + Math.random() * 4),
           },
           {
             id: 'right',
             motion: this.rightMotion,
             strength: Number(this.rightStrength.toFixed(3)),
-            rssi: Math.round(-61 + (Math.random() * 2 - 1)),
-            pps: Math.round(27 + Math.random() * 2),
+            rssi: Math.round(-58 + (Math.random() * 2 - 1)),
+            pps: Math.round(68 + Math.random() * 4),
           },
         ],
         nodes: [
