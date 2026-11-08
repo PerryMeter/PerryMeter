@@ -31,3 +31,20 @@ Known limits:
 - Exact ESP32 model(s) and which board is TX vs RX
 - ESP-IDF version, channel, packet rate, baud rate
 - Flash/monitor commands and known gotchas
+
+## Radar (HLK-LD2410C) sketches
+
+The radar connects through its own Feather ESP32 V2 (not the CSI boards). Flash with the Arduino IDE: board **Adafruit Feather ESP32 V2**, core **esp32 by Espressif Systems** (3.3.12 used).
+
+| Sketch | Flash it when | What reaches the laptop |
+|---|---|---|
+| `radar_bridge/radar_bridge.ino` | **Normal use.** Needed by `radar_test.py`, `radar_plot.py`, `radar_server.py` | The radar's raw binary frames (start `F4 F3 F2 F1`), 921600 baud |
+| `radar_check/radar_check.ino` | Wiring check only | One text line per second: `alive - bytes from radar in last second: N` (about 230 when working). No radar frames, so the Python scripts show nothing |
+
+Wiring: radar VCC to Feather USB (5 V), GND to GND, radar TX to Feather RX (GPIO 7), radar RX to Feather TX (GPIO 8), OUT unused. Radar UART: 256000 baud, 8N1.
+
+Gotchas:
+
+- Only one program can open the port. Close the Arduino Serial Monitor before running the Python scripts.
+- With the bridge flashed, the Serial Monitor shows gibberish. That is normal (binary data).
+- Keep the HLKRadarTool phone app closed while reading over USB; its settings mode can pause the radar's output.
