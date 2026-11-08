@@ -72,6 +72,19 @@ export class LiveSource {
     this.isSchedulingReconnect = false;
   }
 
+  /** Sends a text message to the server (for example a calibrate command). False if not connected. */
+  send(text: string): boolean {
+    if (!this.active || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    try {
+      this.ws.send(text);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private clearTimers(): void {
     if (this.retryTimer !== null) {
       clearTimeout(this.retryTimer);
