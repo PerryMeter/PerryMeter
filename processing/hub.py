@@ -21,8 +21,9 @@ What the dashboard gets
                            radar_settings.py, held for HOLD_S), and with --esp1 they entered:
                            a Wi-Fi side fired just before, or the radar first saw them far away
                            (they came in through its side). See ZoneGate and ENTRY_WINDOW_S.
-                "approach" a Wi-Fi side is active, the radar sees someone beyond the zone, or
-                           it sees someone in range who has not entered (or crossed back out)
+                "approach" a Wi-Fi side is active, or the radar sees someone in range who has not
+                           entered (or crossed back out). Nothing past the zone (MAX_DISTANCE_CM)
+                           is tracked unless --approach-cm is given.
                 "clear"    otherwise
     entry_side  "left", "right" or "base" (the radar's side) while inside, otherwise null
     links       one per Wi-Fi side ("left" = ESP2, "right" = ESP3): motion is "someone is at this
@@ -85,6 +86,10 @@ HOLD_S = 1.0           # radar presence stays on this long after the radar loses
 # through the radar's side). Seen by the radar without an entry: "approach".
 ENTRY_WINDOW_S = 3.0
 FAR_ENTRY_FRACTION = 0.7
+# While the radar sees someone, a side only needs to reach this share of its threshold to count as
+# the entry (the Wi-Fi alone caught only 11-12 of 19 crossings in Rayhan's recording). APPROACH and
+# crossing back out still need the full threshold.
+ENTRY_EVIDENCE = 0.6
 # Leaving: once inside for EXIT_MIN_INSIDE_S, a Wi-Fi side becoming active again means they crossed
 # out. The radar may still see them outside, so the zone drops to "approach" until a new entry.
 EXIT_MIN_INSIDE_S = 2.0
@@ -92,16 +97,24 @@ MOTION_ON_S = 0.3      # radar: seconds of movement before motion turns on
 MOTION_OFF_S = 0.7     # radar: seconds without it before motion turns off
 LINK_ON_S = 0.5        # Wi-Fi side: seconds over the threshold before it counts as active
 LINK_OFF_S = 0.7       # Wi-Fi side: seconds under it before it stops
-LINK_WINDOW_S = 0.5    # Wi-Fi activity window
+# Wi-Fi activity window. 1.0 s instead of 0.5 s so slow crossings build up: on Rayhan's recordings
+# 1.0 s caught 7/7 and 12/19 crossings (0.5 s: 7/7 and 11/19) with the same 0-2% false triggers.
+LINK_WINDOW_S = 1.0
 LINK_MIN_PACKETS = 4   # fewer packets than this in a window: no score (a side can drop to about 14/s)
 LINK_OFFLINE_S = 2.0   # no packet from a side for this long: that node is offline
 DEFAULT_LINK_THRESHOLD = 0.15   # used until the first calibration
 DEFAULT_LINK_BASELINE = 0.03    # typical empty-zone score, used until the first calibration
 CALIBRATION_MARGIN = 1.5        # side threshold = this x the 99th percentile of its empty-zone score
 CALIBRATION_FLOOR = 0.02
-# Both Wi-Fi links end at ESP1, so someone at one side also stirs the other link a little. A side
-# only counts as active if its score/threshold is at least this share of the most active side's.
-DOMINANCE = 0.6
+# Both Wi-Fi links end at ESP1, so someone at one side also stirs the other link. A side only
+# counts as active if it is at least this share as far over its threshold as the most active side.
+DOMINANCE = 0.8
+# "Line blocked" is off by default (--line-blocked turns it on). Replayed on Rayhan's recording it
+# did not separate crossings (AUC 0.35) and kept the side active 46% of the time: it reacts to a
+# person anywhere in the room, not just on the line. Calibration still learns it, so it can be tried.
+BLOCK_MARGIN = 1.5     # line-blocked threshold = this x the 99th percentile of its empty-zone value
+BLOCK_FLOOR = 0.02
+RADAR_THRESHOLD_REFUSE = 95   # a calibrated radar threshold this high means someone was in view
 SIDE_BY_MAC = {"1a:00:00:00:00:02": "left", "1a:00:00:00:00:03": "right"}
 HUB_CALIBRATION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hub_calibration.json")
 STATES = {0: "nobody", 1: "moving", 2: "still", 3: "moving+still"}
@@ -155,7 +168,15 @@ class Radar:
 
 # ---- Wi-Fi links -----------------------------------------------------------
 class Link:
-    """One Wi-Fi side: recent packets, activity score, threshold and motion."""
+    """One Wi-Fi side: recent packets, two scores with their thresholds, and motion.
+
+    score  ("activity")      how fast the signal is changing over the last 0.5 s. Good for walking,
+                             weak for someone moving slowly.
+    block  ("line blocked")  how different the last second's signal pattern is from the empty-zone
+                             pattern saved at calibration. A person on or near the line changes the
+                             pattern even when moving slowly or standing still. Needs a calibration.
+    The side is over its threshold when either score is.
+    """
 
     def __init__(self, side, mac):
         self.side, self.mac = side, mac
@@ -165,7 +186,16 @@ class Link:
         self.calibrated = False
         self.calibrated_at = None
         self.score = None
-        self.over = False      # score past the threshold (with hysteresis), before the side-vs-side check
+        # "line blocked": empty-zone pattern (per subcarrier) and which subcarriers it uses
+        self.base_shape = None
+        self.base_mask = None
+        self.block = None
+        self.block_threshold = None
+        self.block_baseline = None
+        self.cur_shape = None    # last second's pattern (all subcarriers, NaN where unusable)
+        self.ref_amp = None      # median amplitude per subcarrier over the last 2 s
+        self.use_block = False   # --line-blocked
+        self.over = False        # past a threshold (with hysteresis), before the side-vs-side check
         self.motion = False
         self._delay = Delay(LINK_ON_S, LINK_OFF_S)
 
@@ -175,30 +205,51 @@ class Link:
             self.packets.popleft()
 
     def update(self, now):
-        """Recompute the score from the last LINK_WINDOW_S and whether it is over the threshold.
+        """Recompute both scores and whether the side is over a threshold.
         motion itself is decided in update_links, which compares the sides."""
         recent = [p for p in self.packets if now - p[0] <= 2.0]
         window = [p for p in recent if now - p[0] <= LINK_WINDOW_S]
-        self.score = None
+        last_s = [p for p in recent if now - p[0] <= 1.0]
+        self.score = self.block = self.cur_shape = None
         if len(window) >= LINK_MIN_PACKETS and len(recent) >= LINK_MIN_PACKETS:
             # Subcarriers that are always NaN (first_word_invalid) are expected: no warnings for them
             with np.errstate(all="ignore"), warnings.catch_warnings():
                 warnings.simplefilter("ignore", RuntimeWarning)
-                ref = np.nanmedian(np.stack([p[2] for p in recent]), axis=0)
-                good = np.isfinite(ref) & (ref > 6)
+                self.ref_amp = np.nanmedian(np.stack([p[2] for p in recent]), axis=0)
+                good = np.isfinite(self.ref_amp) & (self.ref_amp > 6)
                 if good.sum() >= 8:
                     a = np.stack([p[2] for p in window])[:, good]
                     shape = a / np.maximum(np.nanmedian(a, axis=1, keepdims=True), 2.0)
                     self.score = float(np.nanmedian(np.nanstd(shape, axis=0)))
-        if self.score is None:
-            self.over = False
-        else:
-            self.over = self.score >= (0.8 * self.threshold if self.motion else self.threshold)
+                    norm_mask = self.base_mask if self.base_mask is not None else good
+                    b = np.stack([p[2] for p in last_s])
+                    b = b / np.maximum(np.nanmedian(b[:, norm_mask], axis=1, keepdims=True), 2.0)
+                    self.cur_shape = np.nanmedian(b, axis=0)
+                    if self.use_block and self.base_shape is not None:
+                        m = self.base_mask
+                        self.block = float(np.nanmedian(np.abs(self.cur_shape[m] - self.base_shape[m])))
+        over_motion = self.score is not None and self.score >= (
+            0.8 * self.threshold if self.motion else self.threshold)
+        over_block = (self.block is not None and self.block_threshold is not None and self.block >= (
+            0.8 * self.block_threshold if self.motion else self.block_threshold))
+        self.over = over_motion or over_block
         return self.score
 
+    def follow_room(self):
+        """While the zone is quiet, let the empty-zone pattern slowly follow the room (about 20 s),
+        so slow changes (people moving furniture, temperature) do not turn into false alarms."""
+        if (self.base_shape is None or self.cur_shape is None or self.block is None
+                or self.motion or self.block >= 0.5 * self.block_threshold):
+            return
+        m = self.base_mask & np.isfinite(self.cur_shape)
+        self.base_shape[m] = 0.995 * self.base_shape[m] + 0.005 * self.cur_shape[m]
+
     def relative(self):
-        """Score as a multiple of the threshold (1.0 = at the threshold)."""
-        return 0.0 if self.score is None or self.threshold <= 0 else self.score / self.threshold
+        """How far over its thresholds the side is (1.0 = exactly at one of them)."""
+        rel = 0.0 if self.score is None or self.threshold <= 0 else self.score / self.threshold
+        if self.block is not None and self.block_threshold:
+            rel = max(rel, self.block / self.block_threshold)
+        return rel
 
     def stats(self, now):
         last_s = [p for p in self.packets if now - p[0] <= 1.0]
@@ -207,22 +258,30 @@ class Link:
         return online, len(last_s), rssi
 
     def strength(self):
-        """0 at the empty-zone baseline, 0.5 at the threshold, 1 at twice that distance above it."""
-        if self.score is None:
-            return 0.0
-        span = max(1e-6, self.threshold - self.baseline)
-        return max(0.0, min(1.0, 0.5 * (self.score - self.baseline) / span))
+        """0 at the empty-zone baseline, 0.5 at the threshold, 1 at twice that distance above it
+        (the larger of the activity and line-blocked versions)."""
+        best = 0.0
+        if self.score is not None:
+            span = max(1e-6, self.threshold - self.baseline)
+            best = 0.5 * (self.score - self.baseline) / span
+        if self.block is not None and self.block_threshold and self.block_baseline is not None:
+            span = max(1e-6, self.block_threshold - self.block_baseline)
+            best = max(best, 0.5 * (self.block - self.block_baseline) / span)
+        return max(0.0, min(1.0, best))
 
 
-def update_links(links, now):
+def update_links(links, now, quiet):
     """Score every side, then decide which sides are active. A side over its threshold only counts
-    if it is at least DOMINANCE as far over as the most active side (see DOMINANCE)."""
+    if it is at least DOMINANCE as far over as the most active side (see DOMINANCE).
+    quiet: the radar sees nobody, so the empty-zone patterns may follow the room."""
     for link in links.values():
         link.update(now)
     top = max((l.relative() for l in links.values() if l.over), default=0.0)
     for link in links.values():
         want = link.over and link.relative() >= DOMINANCE * top
         link.motion = link._delay.update(want, now)
+        if quiet:
+            link.follow_room()
 
 
 class Esp1Stats:
@@ -341,7 +400,7 @@ def fake_reader(radar, approach_cm):
     """Simulated radar, 20 s cycle: nobody, walking in the zone, standing still, someone beyond it."""
     move_e = 100
     still_e = min(100, rs.STILL_THRESHOLD + 25)
-    far_cm = min(approach_cm, rs.MAX_DISTANCE_CM + 150)
+    far_cm = rs.MAX_DISTANCE_CM + 150 if approach_cm is None else min(approach_cm, rs.MAX_DISTANCE_CM + 150)
     t0 = time.time()
     while True:
         t = (time.time() - t0) % 20
@@ -388,6 +447,10 @@ class RadarLogic:
         self.last_inside_cm = None
 
     def far_target_cm(self, frame, avg_m, avg_s):
+        """Someone beyond the zone, only when --approach-cm reaches past it (off by default:
+        the radar does not track anyone past MAX_DISTANCE_CM)."""
+        if self.approach_cm is None or self.approach_cm <= rs.MAX_DISTANCE_CM:
+            return None
         state, m_cm, _, s_cm, _, _ = frame
         lo, hi = rs.MAX_DISTANCE_CM, self.approach_cm
         if state in (1, 3) and avg_m >= rs.MOVING_THRESHOLD and lo < m_cm <= hi:
@@ -421,17 +484,22 @@ class ZoneGate:
         self.first_seen_cm = None
         self.present_before = False
         self.exit_at = 0.0
-        self.last_rise = {}          # side -> time it last became active
+        self.last_rise = {}          # side -> last time its entry evidence started (ENTRY_EVIDENCE)
         self.prev_active = {}
+        self.prev_evidence = {}
         self.state = "clear"         # clear | inside | seen_no_entry | left_zone
 
-    def update(self, now, present, dist_cm, side_active):
-        rose = []
+    def update(self, now, present, dist_cm, side_active, side_evidence):
+        """side_active: side fully over its threshold. side_evidence: side at ENTRY_EVIDENCE of it."""
+        rose = []   # sides that just became fully active (used for crossing back out)
         for side, active in side_active.items():
             if active and not self.prev_active.get(side):
-                self.last_rise[side] = now
                 rose.append(side)
             self.prev_active[side] = active
+        for side, ev in side_evidence.items():
+            if ev and not self.prev_evidence.get(side):
+                self.last_rise[side] = now
+            self.prev_evidence[side] = ev
 
         if not present:
             self.inside, self.entry_side, self.inside_since = False, None, None
@@ -471,6 +539,7 @@ class Calibrator:
         self.until = 0.0
         self.measure_s = 15.0
         self.scores = collections.defaultdict(list)
+        self.shapes = collections.defaultdict(list)
         self.radar_m, self.radar_s = [], []
         self.message = "Not calibrated in this session"
         self.results = None
@@ -479,6 +548,7 @@ class Calibrator:
     def start(self, now, countdown_s, measure_s):
         self.state, self.until, self.measure_s = "countdown", now + countdown_s, measure_s
         self.scores = collections.defaultdict(list)
+        self.shapes = collections.defaultdict(list)
         self.radar_m, self.radar_s = [], []
         self.message = f"Leave the zone. Measuring starts in {countdown_s:g} s"
         print(f"calibration: countdown {countdown_s:g} s, then {measure_s:g} s", flush=True)
@@ -492,6 +562,8 @@ class Calibrator:
         for side, link in links.items():
             if link.score is not None:
                 self.scores[side].append(link.score)
+            if link.cur_shape is not None:
+                self.shapes[side].append(link.cur_shape.copy())
         if radar_sample is not None:
             m, s = radar_sample
             self.radar_m.append(m)
@@ -509,7 +581,7 @@ class Calibrator:
                 self.finish(links)
 
     def finish(self, links):
-        results, problems, warnings = {"links": {}, "radar": None}, [], []
+        results, problems = {"links": {}, "radar": None}, []
         for side, link in links.items():
             vals = self.scores.get(side, [])
             if len(vals) < 20:
@@ -522,20 +594,45 @@ class Calibrator:
             results["links"][side] = {"mac": link.mac, "threshold": link.threshold,
                                       "empty_median": link.baseline,
                                       "empty_p99": round(p99, 4), "windows": len(vals)}
+            # Line blocked: the empty-zone pattern, and how much it normally wanders
+            shapes = self.shapes.get(side, [])
+            if len(shapes) >= 20 and link.ref_amp is not None:
+                with np.errstate(all="ignore"), warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)
+                    stack = np.stack(shapes)
+                    base = np.nanmedian(stack, axis=0)
+                    mask = np.isfinite(base) & np.isfinite(link.ref_amp) & (link.ref_amp > 6)
+                    if mask.sum() >= 8:
+                        blocks = np.nanmedian(np.abs(stack[:, mask] - base[mask]), axis=1)
+                        link.base_shape, link.base_mask = base, mask
+                        link.block_baseline = round(float(np.median(blocks)), 4)
+                        bp99 = float(np.percentile(blocks, 99))
+                        link.block_threshold = round(max(BLOCK_FLOOR, BLOCK_MARGIN * bp99,
+                                                         2 * link.block_baseline), 4)
+                        results["links"][side].update({"block_threshold": link.block_threshold,
+                                                       "block_empty_median": link.block_baseline,
+                                                       "block_empty_p99": round(bp99, 4)})
+            if link.block_threshold is None:
+                problems.append(f"{side} side: could not learn the empty-zone pattern")
         if len(self.radar_m) >= 20:
             pm = float(np.percentile(self.radar_m, 99))
             ps = float(np.percentile(self.radar_s, 99))
             mt = round(min(100, max(20, pm + 10)))
             st = round(min(100, max(20, ps + 10)))
-            rs.MOVING_THRESHOLD, rs.STILL_THRESHOLD = mt, st
-            rs.THRESHOLD_SOURCE = f"hub calibration at {now_text()}"
             results["radar"] = {"moving_threshold": mt, "still_threshold": st,
                                 "empty_movement_p99": round(pm, 1), "empty_stillness_p99": round(ps, 1)}
-            for name, t in (("movement", mt), ("stillness", st)):
-                if t >= 95:
-                    warnings.append(f"radar {name} threshold is {t}: something in view was moving or "
-                                    "very close during calibration")
-            save_radar_calibration(mt, st, pm, ps, len(self.radar_m))
+            if mt >= RADAR_THRESHOLD_REFUSE or st >= RADAR_THRESHOLD_REFUSE:
+                # Someone was moving or standing in the radar's range: these thresholds would blind it
+                results["radar"]["applied"] = False
+                problems.append(f"radar NOT changed: someone was in its range during calibration "
+                                f"(movement {pm:.0f}, stillness {ps:.0f} in an 'empty' zone). Keep everyone "
+                                f"at least 3 m away and calibrate again. Still using {rs.MOVING_THRESHOLD}/"
+                                f"{rs.STILL_THRESHOLD}")
+            else:
+                rs.MOVING_THRESHOLD, rs.STILL_THRESHOLD = mt, st
+                rs.THRESHOLD_SOURCE = f"hub calibration at {now_text()}"
+                results["radar"]["applied"] = True
+                save_radar_calibration(mt, st, pm, ps, len(self.radar_m))
         else:
             problems.append("radar: too few readings")
         save_hub_calibration(links)
@@ -544,7 +641,7 @@ class Calibrator:
             self.state, self.message = "failed", "; ".join(problems)
         else:
             self.state = "done"
-            self.message = "Calibrated" + (". " + "; ".join(problems + warnings) if problems or warnings else "")
+            self.message = "Calibrated" + (". " + "; ".join(problems) if problems else "")
         print(f"calibration: {self.state}: {json.dumps(results)} {self.message}", flush=True)
 
     def status(self, now):
@@ -553,21 +650,30 @@ class Calibrator:
                 "message": self.message, "at": self.at, "results": self.results}
 
 
+def link_calibration(l):
+    entry = {"side": l.side, "threshold": l.threshold, "baseline": l.baseline}
+    if l.base_shape is not None:
+        entry.update({
+            "block_threshold": l.block_threshold, "block_baseline": l.block_baseline,
+            "base_mask": [int(i) for i in np.flatnonzero(l.base_mask)],
+            "base_shape": [None if not np.isfinite(v) else round(float(v), 5) for v in l.base_shape],
+        })
+    return entry
+
+
 def save_hub_calibration(links):
     data = {"created": now_text(), "margin": CALIBRATION_MARGIN,
-            "links": {l.mac: {"side": l.side, "threshold": l.threshold, "baseline": l.baseline}
-                      for l in links.values() if l.calibrated}}
+            "links": {l.mac: link_calibration(l) for l in links.values() if l.calibrated}}
     with open(HUB_CALIBRATION_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+        json.dump(data, f)
 
 
 def save_hub_calibration_all(links):
-    """Save every side's current threshold (after a manual change), calibrated or not."""
+    """Save every side's current thresholds (after a manual change), calibrated or not."""
     data = {"created": now_text(), "margin": CALIBRATION_MARGIN,
-            "links": {l.mac: {"side": l.side, "threshold": l.threshold, "baseline": l.baseline}
-                      for l in links.values()}}
+            "links": {l.mac: link_calibration(l) for l in links.values()}}
     with open(HUB_CALIBRATION_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+        json.dump(data, f)
 
 
 def load_hub_calibration(links):
@@ -582,6 +688,14 @@ def load_hub_calibration(links):
                 link.threshold, link.calibrated = float(entry["threshold"]), True
                 link.baseline = float(entry.get("baseline", DEFAULT_LINK_BASELINE))
                 link.calibrated_at = data.get("created")
+                if entry.get("base_shape") and entry.get("block_threshold"):
+                    shape = np.array([np.nan if v is None else v for v in entry["base_shape"]], dtype=float)
+                    mask = np.zeros(shape.size, dtype=bool)
+                    mask[[i for i in entry.get("base_mask", []) if 0 <= i < shape.size]] = True
+                    if mask.sum() >= 8:
+                        link.base_shape, link.base_mask = shape, mask
+                        link.block_threshold = float(entry["block_threshold"])
+                        link.block_baseline = float(entry.get("block_baseline", 0.0))
         return data.get("created")
     except (OSError, ValueError, KeyError) as e:
         print(f"Could not read {HUB_CALIBRATION_FILE} ({e}); using the default thresholds.", flush=True)
@@ -601,6 +715,8 @@ def save_radar_calibration(mt, st, pm, ps, n):
 async def run(args):
     radar = Radar(args.record)
     links = {side: Link(side, mac) for mac, side in SIDE_BY_MAC.items()} if args.esp1 else {}
+    for link in links.values():
+        link.use_block = args.line_blocked
     links_lock = threading.Lock()
     esp1 = Esp1Stats()
     calibrator = Calibrator()
@@ -645,8 +761,12 @@ async def run(args):
                         link = links[side]
                         link.threshold = round(max(CALIBRATION_FLOOR, link.threshold * factor,
                                                    link.baseline * 1.2), 4)
+                        if link.block_threshold is not None:
+                            link.block_threshold = round(max(BLOCK_FLOOR, link.block_threshold * factor,
+                                                             (link.block_baseline or 0) * 1.2), 4)
                         save_hub_calibration_all(links)
-                    print(f"threshold: {side} set to {link.threshold}", flush=True)
+                    print(f"threshold: {side} set to {link.threshold} (line blocked {link.block_threshold})",
+                          flush=True)
 
     async with serve(handler, args.host, args.port) as server:
         print(f"Perrymeter hub on ws://{args.host}:{args.port} (Ctrl+C to stop)", flush=True)
@@ -663,13 +783,16 @@ async def run(args):
             frame, frame_time, avg_m, avg_s, radar_fps = radar.get()
             radar_fresh = frame is not None and now - frame_time <= STALE_S
 
-            with links_lock:
-                update_links(links, now)
-                link_info = {s: (l.stats(now), l.score, l.threshold, l.calibrated, l.motion, l.strength(),
-                                 l.baseline)
-                             for s, l in links.items()}
-
             r = logic.update(frame, avg_m, avg_s, now) if radar_fresh else None
+
+            with links_lock:
+                # The empty-zone patterns only follow the room while the radar sees nobody
+                # and no calibration is running
+                quiet = radar_fresh and not r["inside"] and calibrator.state not in ("countdown", "measuring")
+                update_links(links, now, quiet)
+                link_info = {s: (l.stats(now), l.score, l.threshold, l.calibrated, l.motion, l.strength(),
+                                 l.baseline, l.block, l.block_threshold, l.relative())
+                             for s, l in links.items()}
             radar_sample = None
             if radar_fresh:
                 m_in = avg_m if rs.MIN_DISTANCE_CM <= frame[1] <= rs.MAX_DISTANCE_CM else 0.0
@@ -680,7 +803,8 @@ async def run(args):
             side_active = [s for s, info in link_info.items() if info[0][0] and info[4]]
             radar_present = bool(r and r["inside"])
             gate.update(now, radar_present, r["inside_cm"] if r else None,
-                        {s: bool(info[0][0] and info[4]) for s, info in link_info.items()})
+                        {s: bool(info[0][0] and info[4]) for s, info in link_info.items()},
+                        {s: bool(info[0][0] and info[9] >= ENTRY_EVIDENCE) for s, info in link_info.items()})
 
             any_link_fresh = any(info[0][0] for info in link_info.values())
             if not radar_fresh and not any_link_fresh:
@@ -722,6 +846,8 @@ async def run(args):
                                    "rssi": info[0][2],
                                    "score": None if info[1] is None else round(info[1], 4),
                                    "threshold": info[2], "baseline": info[6],
+                                   "block": None if info[7] is None else round(info[7], 4),
+                                   "block_threshold": info[8],
                                    "calibrated": info[3], "motion": info[4]}
                                   for s, info in link_info.items()],
                         "radar": None if not radar_fresh else {
@@ -756,7 +882,8 @@ async def run(args):
                 for s, info in link_info.items():
                     (online, pps, rssi), score, thr = info[0], info[1], info[2]
                     sc = "--" if score is None else f"{score:.3f}"
-                    parts.append(f"{s} {pps}/s {rssi}dBm {sc}/{thr:g}{' ACTIVE' if info[4] else ''}"
+                    bl = "" if info[7] is None or info[8] is None else f" blk {info[7]:.3f}/{info[8]:g}"
+                    parts.append(f"{s} {pps}/s {rssi}dBm {sc}/{thr:g}{bl}{' ACTIVE' if info[4] else ''}"
                                  if online else f"{s} offline")
                 if radar_fresh:
                     parts.append(f"radar {radar_fps}/s {r['prediction']} {frame[1]}/{frame[3]}cm")
@@ -776,14 +903,18 @@ def main():
     src.add_argument("--radar", help="radar Feather bridge's serial port, e.g. COM5")
     src.add_argument("--fake-radar", action="store_true", help="simulated radar data")
     p.add_argument("--baud", type=int, default=BAUD)
-    p.add_argument("--approach-cm", type=int, default=600,
-                   help="someone the radar sees beyond the zone but within this distance counts as approach")
+    p.add_argument("--approach-cm", type=int, default=None,
+                   help="also show APPROACH for someone the radar sees beyond the zone, up to this distance "
+                        "(off by default: nothing past the zone is tracked)")
     p.add_argument("--record", help="save every radar frame to this CSV file")
     p.add_argument("--record-csi", help="(with --esp1) append every CSI line to this CSV file")
     p.add_argument("--no-entry-logic", action="store_true",
                    help="ALERT whenever the radar sees someone in range, without needing an entry")
     p.add_argument("--no-exit-on-crossing", action="store_true",
                    help="stay ALERT until the radar loses the person, even after a side fires again")
+    p.add_argument("--line-blocked", action="store_true",
+                   help="experimental: also trigger a side when its signal pattern differs from the "
+                        "empty zone (off by default, see BLOCK_MARGIN)")
     p.add_argument("--calibrate-on-start", action="store_true", help="calibrate as soon as the hub starts")
     p.add_argument("--countdown", type=float, default=5, help="seconds to leave the zone before calibrating")
     p.add_argument("--calibration-seconds", type=float, default=15, help="how long to measure the empty zone")
