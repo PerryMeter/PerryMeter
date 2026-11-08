@@ -13,6 +13,7 @@ Needs:  pip install pyserial websockets
 """
 import argparse
 import asyncio
+import collections
 import json
 import math
 import random
@@ -22,19 +23,16 @@ import time
 
 from websockets.asyncio.server import broadcast, serve
 
+# Thresholds, distance limits and averaging live in radar_settings.py (shared with radar_plot.py)
+from radar_settings import (MAX_DISTANCE_CM, MIN_DISTANCE_CM, MOVING_THRESHOLD,
+                            SMOOTH_S, STILL_THRESHOLD, THRESHOLD_SOURCE, classify)
+
 # ---- settings -------------------------------------------------------------
 BAUD = 921600       # must match Serial.begin(...) in the ESP32 sketch
 ON_AFTER = 0.3      # seconds of movement before motion turns on
 OFF_AFTER = 0.7     # seconds without movement before motion turns off
 STALE_AFTER = 1.0   # no radar frame for this long = send nothing
-ENERGY_ON = 30      # moving energy (0-100) we treat as clear movement (confidence only)
 SEND_RATE = 10      # messages per second to the dashboard (or use --rate)
-
-# ---- detection filters: change these to tune what counts ------------------
-MIN_DISTANCE_CM = 0      # ignore targets closer than this (e.g. 50 ignores things right at the radar)
-MAX_DISTANCE_CM = 600    # ignore targets farther than this (e.g. 300 = only within 3 m)
-MIN_MOVING_ENERGY = 0    # ignore movement weaker than this (0-100)
-MIN_STILL_ENERGY = 0     # ignore still targets weaker than this (0-100)
 
 HEAD = b"\xF4\xF3\xF2\xF1"
 TAIL = b"\xF8\xF7\xF6\xF5"
@@ -71,20 +69,30 @@ def read_frames(ser):
 
 
 class Latest:
-    """The most recent radar frame, shared between the reader thread and the server."""
+    """The most recent radar frame plus energies averaged over SMOOTH_S seconds,
+    shared between the reader thread and the server."""
 
     def __init__(self):
         self._lock = threading.Lock()
         self.frame, self.time, self.count = None, 0.0, 0
+        self._recent = collections.deque()  # (time, moving_energy, still_energy)
+        self.avg_m = self.avg_s = 0.0
 
     def put(self, frame):
+        now = time.time()
         with self._lock:
-            self.frame, self.time = frame, time.time()
+            self.frame, self.time = frame, now
             self.count += 1
+            self._recent.append((now, frame[2], frame[4]))
+            while now - self._recent[0][0] > SMOOTH_S:
+                self._recent.popleft()
+            n = len(self._recent)
+            self.avg_m = sum(r[1] for r in self._recent) / n
+            self.avg_s = sum(r[2] for r in self._recent) / n
 
     def get(self):
         with self._lock:
-            return self.frame, self.time, self.count
+            return self.frame, self.time, self.count, self.avg_m, self.avg_s
 
 
 def serial_reader(port, baud, latest):
@@ -142,22 +150,18 @@ class Hysteresis:
         return self.motion
 
 
-def build_message(frame, hyst, now):
-    state, m_cm, m_en, s_cm, s_en, d_cm = frame
+def build_message(frame, avg_m, avg_s, hyst, now):
+    """Apply the rule from radar_settings.py and build the dashboard message."""
+    _state, m_cm, m_en, s_cm, s_en, _d_cm = frame
+    prediction, dist_cm = classify(avg_m, avg_s, m_cm, s_cm)
+    motion = hyst.update(prediction == "moving", now)
 
-    def in_range(cm):
-        return MIN_DISTANCE_CM <= cm <= MAX_DISTANCE_CM
+    strength = min(1.0, avg_m / 100)
 
-    moving = state in (1, 3) and in_range(m_cm) and m_en >= MIN_MOVING_ENERGY
-    still = state in (2, 3) and in_range(s_cm) and s_en >= MIN_STILL_ENERGY
-    motion = hyst.update(moving, now)
-
-    energy = m_en if moving else 0  # movement that passed the filters
-    strength = min(1.0, energy / 100)
-
-    # Heuristic, not a probability: how clearly the energy agrees with the decision.
-    margin = min(1.0, abs(energy - ENERGY_ON) / ENERGY_ON)
-    agrees = (energy >= ENERGY_ON) == motion
+    # Heuristic, not a probability: how far the averaged movement energy is
+    # from the moving threshold, on the side that agrees with the decision.
+    margin = min(1.0, abs(avg_m - MOVING_THRESHOLD) / MOVING_THRESHOLD)
+    agrees = (avg_m >= MOVING_THRESHOLD) == motion
     confidence = 0.5 + 0.5 * margin if agrees else 0.5
 
     return {
@@ -166,10 +170,11 @@ def build_message(frame, hyst, now):
         "strength": round(strength, 3),
         "confidence": round(confidence, 3),
         # extra fields (the dashboard ignores ones it does not know)
-        "present": moving or still,
-        "distance_m": round((m_cm if moving else s_cm) / 100, 2) if (moving or still) else None,
-        "moving_energy": m_en,
-        "still_energy": s_en,
+        "prediction": prediction,              # "moving" | "still" | "nothing"
+        "present": prediction != "nothing",
+        "distance_m": round(dist_cm / 100, 2) if dist_cm is not None else None,
+        "moving_energy": round(avg_m, 1),      # averaged over SMOOTH_S
+        "still_energy": round(avg_s, 1),
         "source": "ld2410c",
     }
 
@@ -191,16 +196,19 @@ async def run(args):
 
     async with serve(handler, "0.0.0.0", args.port) as server:
         print(f"WebSocket server on ws://0.0.0.0:{args.port}  (Ctrl+C to stop)")
+        print(f"Rule: moving if movement >= {MOVING_THRESHOLD}, else still if stillness >= "
+              f"{STILL_THRESHOLD}, else nothing; {MIN_DISTANCE_CM}-{MAX_DISTANCE_CM} cm; "
+              f"{SMOOTH_S:g} s average. Thresholds from: {THRESHOLD_SOURCE}")
         last_status, last_count, msg = time.time(), 0, None
         while True:
             await asyncio.sleep(1.0 / args.rate)
             now = time.time()
-            frame, frame_time, count = latest.get()
+            frame, frame_time, count, avg_m, avg_s = latest.get()
 
             if frame is None or now - frame_time > STALE_AFTER:
                 msg = None  # send nothing, so the dashboard shows "Waiting for data"
             else:
-                msg = build_message(frame, hyst, now)
+                msg = build_message(frame, avg_m, avg_s, hyst, now)
                 broadcast(server.connections, json.dumps(msg))
 
             if now - last_status >= 1.0:
@@ -210,7 +218,7 @@ async def run(args):
                     print(f"no radar data      clients={clients}")
                 else:
                     print(
-                        f"{fps:3d} frames/s  {STATES.get(frame[0], frame[0]):15} "
+                        f"{fps:3d} frames/s  {msg['prediction']:8} "
                         f"motion={'YES' if msg['motion'] else 'no ':3}  "
                         f"strength={msg['strength']:.2f}  distance={msg['distance_m']}  "
                         f"clients={clients}"

@@ -1,0 +1,17 @@
+{
+  "moving_threshold": 94,
+  "still_threshold": 52,
+  "created": "2026-11-07 20:05",
+  "seconds_measured": 20,
+  "readings": 190,
+  "empty_room_movement_p99": 83.9,
+  "empty_room_movement_max": 94.0,
+  "empty_room_stillness_p99": 41.6,
+  "empty_room_stillness_max": 42.1,
+  "margin": 10,
+  "floor": 20,
+  "distance_range_cm": [
+    0,
+    150
+  ]
+}
