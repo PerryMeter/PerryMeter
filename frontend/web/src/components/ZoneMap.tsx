@@ -57,17 +57,45 @@ function drawSide(
 ) {
   ctx.save();
 
-  // If nodes is null (older servers): idle style, but coloured by overall alert if links is null
-  if (nodes === null) {
-    let color: string = theme.lineStrong;
-    if (links === null) {
-      if (armed) {
-        if (alert === 'inside') color = theme.motion;
-        else if (alert === 'approach') color = theme.warn;
-        else color = theme.accent;
-      } else {
-        color = theme.accent;
-      }
+  // 19.1: node states apply only when the server reports nodes. With nodes null
+  // (older servers) the side is drawn exactly as before Phase 13.
+  if (nodes !== null) {
+    const node = nodes.find((n) => n.id === sideId);
+
+    // Not installed (node missing from nodes): 1.5px dashed faint, dashes 4px on and
+    // 4px off (the same as the bottom side), no glow, ignores links and alert.
+    if (!node) {
+      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = theme.faint;
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
+
+    // Offline (node reported with online false): 2px dashed error at 70%
+    if (!node.online) {
+      ctx.setLineDash([6, 6]);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = hexToRgba(theme.error, 0.70);
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
+  }
+
+  // Older servers without links: colour both sides by the overall alert (18.7)
+  if (links === null) {
+    let color: string = theme.accent;
+    if (armed) {
+      if (alert === 'inside') color = theme.motion;
+      else if (alert === 'approach') color = theme.warn;
     }
     ctx.setLineDash([]);
     ctx.lineWidth = 2;
@@ -80,40 +108,9 @@ function drawSide(
     return;
   }
 
-  const node = nodes.find((n) => n.id === sideId);
+  const link = links.find((l) => l.id === sideId);
 
-  // 19.1: Left or right side not installed (node not in nodes):
-  // 1.5px dashed faint, dashes 4px on and 4px off (the same as the bottom side),
-  // no glow, and it ignores links and alert.
-  if (!node) {
-    ctx.setLineDash([4, 4]);
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = theme.faint;
-    ctx.beginPath();
-    ctx.moveTo(p1.x, p1.y);
-    ctx.lineTo(p2.x, p2.y);
-    ctx.stroke();
-    ctx.restore();
-    return;
-  }
-
-  // 19.1: Offline (node in nodes, online === false): 2px dashed error at 70%
-  if (!node.online) {
-    ctx.setLineDash([6, 6]);
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = hexToRgba(theme.error, 0.70);
-    ctx.beginPath();
-    ctx.moveTo(p1.x, p1.y);
-    ctx.lineTo(p2.x, p2.y);
-    ctx.stroke();
-    ctx.restore();
-    return;
-  }
-
-  // Node is online! Check matching link
-  const link = links ? links.find((l) => l.id === sideId) : null;
-
-  // 19.1: Online but its link is missing from links: the idle style (2px line-strong), not red.
+  // No link for this side (node online, or no node status): the idle style (2px line-strong), not red.
   if (!link) {
     ctx.setLineDash([]);
     ctx.lineWidth = 2;

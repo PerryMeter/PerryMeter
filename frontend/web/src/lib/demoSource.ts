@@ -171,12 +171,11 @@ export class DemoSource {
       this.phaseElapsed += dt;
       this.alert = 'inside';
 
-      // Drift distance by up to 0.05 per tick
+      // Drift distance by up to 0.05 per tick. Keep full precision here: rounding every
+      // tick would cancel the drift. The message rounds it to 0.1 m.
       if (this.distanceM !== null) {
-        const drift = (Math.random() * 2 - 1) * 0.04;
-        this.distanceM = Number(
-          Math.max(1.0, Math.min(3.0, this.distanceM + drift)).toFixed(1)
-        );
+        const drift = (Math.random() * 2 - 1) * 0.05;
+        this.distanceM = Math.max(1.0, Math.min(3.0, this.distanceM + drift));
       }
 
       // Radar movement level 0.4 to 0.6
