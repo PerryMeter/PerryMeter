@@ -18,12 +18,10 @@ the live numbers below and has the Calibrate button.
 
 What the dashboard gets
     alert       "inside"   the radar sees a person in range, moving or still (the rule in
-                           radar_settings.py, held for HOLD_S), and with --esp1 they entered:
-                           a Wi-Fi side fired just before, or the radar first saw them far away
-                           (they came in through its side). See ZoneGate and ENTRY_WINDOW_S.
-                "approach" a Wi-Fi side is active, or the radar sees someone in range who has not
-                           entered (or crossed back out). Nothing past the zone (MAX_DISTANCE_CM)
-                           is tracked unless --approach-cm is given.
+                           radar_settings.py, held for HOLD_S). With the experimental
+                           --entry-logic they must also have entered (see ZoneGate).
+                "approach" a Wi-Fi side is active (someone at a side). Nothing past the zone
+                           (MAX_DISTANCE_CM) is tracked unless --approach-cm is given.
                 "clear"    otherwise
     entry_side  "left", "right" or "base" (the radar's side) while inside, otherwise null
     links       one per Wi-Fi side ("left" = ESP2, "right" = ESP3): motion is "someone is at this
@@ -523,8 +521,17 @@ class ZoneGate:
             self.first_seen_cm, self.present_before = dist_cm, True
 
         if not self.enabled:
+            # Radar decides: anyone in range is inside. The Wi-Fi sides only name the entry side
+            # (for the arrow), they never hold back an ALERT.
             if not self.inside:
                 self.inside, self.inside_since, self.state = True, now, "inside"
+                recent = [(t, s) for s, t in self.last_rise.items() if now - t <= ENTRY_WINDOW_S]
+                if recent:
+                    self.entry_side = max(recent)[1]
+                elif self.first_seen_cm is not None and self.first_seen_cm >= FAR_ENTRY_FRACTION * rs.MAX_DISTANCE_CM:
+                    self.entry_side = "base"
+                else:
+                    self.entry_side = None
             return
 
         if self.inside:
@@ -767,7 +774,8 @@ async def run(args):
     threading.Thread(target=target, args=targs, daemon=True).start()
     logic = RadarLogic(args.approach_cm)
     # Entry logic needs the Wi-Fi sides, so it only applies with --esp1
-    gate = ZoneGate(enabled=bool(args.esp1) and not args.no_entry_logic,
+    # Off by default: in the second live test it dropped people who were inside to APPROACH
+    gate = ZoneGate(enabled=bool(args.esp1) and args.entry_logic,
                     exit_on_crossing=not args.no_exit_on_crossing)
     loop_start = time.time()
     if args.calibrate_on_start:
@@ -954,10 +962,11 @@ def main():
                         "(off by default: nothing past the zone is tracked)")
     p.add_argument("--record", help="save every radar frame to this CSV file")
     p.add_argument("--record-csi", help="(with --esp1) append every CSI line to this CSV file")
-    p.add_argument("--no-entry-logic", action="store_true",
-                   help="ALERT whenever the radar sees someone in range, without needing an entry")
+    p.add_argument("--entry-logic", action="store_true",
+                   help="experimental: ALERT only after an entry (a Wi-Fi side fired, or the radar first saw "
+                        "them far away); otherwise anyone the radar sees in range is ALERT")
     p.add_argument("--no-exit-on-crossing", action="store_true",
-                   help="stay ALERT until the radar loses the person, even after a side fires again")
+                   help="with --entry-logic: stay ALERT until the radar loses the person")
     p.add_argument("--line-blocked", action="store_true",
                    help="experimental: also trigger a side when its signal pattern differs from the "
                         "empty zone (off by default, see BLOCK_MARGIN)")
