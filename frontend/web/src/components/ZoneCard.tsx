@@ -36,7 +36,7 @@ export function ZoneCard({
       captionText =
         alert === 'inside'
           ? 'Person in zone, logged only'
-          : 'Crossings are logged without an alarm';
+          : 'Entries are logged without an alarm';
       cardStyles = 'bg-surface border-line';
     } else if (alert === 'inside') {
       // ALERT state
@@ -44,12 +44,15 @@ export function ZoneCard({
       valueColor = 'text-motion';
       const ongoingEvent =
         events.length > 0 && events[0].endAt === null ? events[0] : null;
-      const sideSuffix = ongoingEvent?.side ? `, entered via ${ongoingEvent.side}` : '';
+      const durationSec = ongoingEvent
+        ? Math.max(0, (now - ongoingEvent.startAt) / 1000)
+        : 0;
+      const notMovingSuffix =
+        isFresh && latest?.motion === false ? ', not moving' : '';
       if (ongoingEvent) {
-        const durationSec = Math.max(0, (now - ongoingEvent.startAt) / 1000);
-        captionText = `Person in zone for ${durationSec.toFixed(1)} s${sideSuffix}`;
+        captionText = `Person in zone for ${durationSec.toFixed(1)} s${notMovingSuffix}`;
       } else {
-        captionText = `Person in zone${sideSuffix}`;
+        captionText = `Person in zone${notMovingSuffix}`;
       }
       cardStyles = 'border-motion/60 animate-alert-glow';
       cardInlineStyle = {
@@ -62,8 +65,10 @@ export function ZoneCard({
       valueColor = 'text-warn';
       const activeLinks = latest?.links;
       if (activeLinks && activeLinks.length > 0) {
-        const highestLink = [...activeLinks].sort((a, b) => b.strength - a.strength)[0];
-        captionText = `Someone near the ${highestLink.id} side`;
+        const movingLinks = activeLinks.filter((l) => l.motion);
+        const candidates = movingLinks.length > 0 ? movingLinks : activeLinks;
+        const bestLink = [...candidates].sort((a, b) => b.strength - a.strength)[0];
+        captionText = `Activity at the ${bestLink.id} side`;
       } else if (distanceM !== null) {
         captionText = `Someone approaching, ${distanceM.toFixed(1)} m from the fence`;
       } else {

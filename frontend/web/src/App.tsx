@@ -226,8 +226,10 @@ export default function App() {
       ) : (
         /* REGULAR LAYOUT (Wide 3-col, Tablet/Mobile 1-col) */
         <>
-          {/* Main Content Area */}
-          <div className="flex-1 min-h-0 w-full my-2 min-[1100px]:[container-type:size]">
+          {/* Main Content Area. min-h-0 only on the wide layout: below 1100px the cards stack
+              taller than the screen, so this area must grow and let the page scroll instead of
+              letting the stack spill over the graph and footer. */}
+          <div className="flex-1 w-full my-2 min-[1100px]:min-h-0 min-[1100px]:[container-type:size]">
             <div className="flex flex-col gap-4 min-[1100px]:grid min-[1100px]:grid-cols-[min(100cqh,40cqw)_minmax(0,1.4fr)_minmax(0,1fr)] min-[1100px]:grid-rows-[minmax(0,1fr)] min-[1100px]:gap-4 min-[1100px]:h-full min-[1100px]:w-full min-[1100px]:items-stretch">
               {/* Column 1: ZoneMap */}
               <ZoneMap signalRef={signalRef} mode={mode} armed={armed} />
