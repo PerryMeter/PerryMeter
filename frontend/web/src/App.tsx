@@ -191,6 +191,7 @@ export default function App() {
           onCalibrate={() => sendCommand({ type: 'calibrate' })}
           onCancelCalibration={() => sendCommand({ type: 'cancel_calibration' })}
           onAdjustThreshold={(side, factor) => sendCommand({ type: 'adjust_threshold', side, factor })}
+          onSwapSides={() => sendCommand({ type: 'swap_sides' })}
         />
       )}
 

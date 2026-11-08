@@ -90,9 +90,11 @@ FAR_ENTRY_FRACTION = 0.7
 # the entry (the Wi-Fi alone caught only 11-12 of 19 crossings in Rayhan's recording). APPROACH and
 # crossing back out still need the full threshold.
 ENTRY_EVIDENCE = 0.6
-# Leaving: once inside for EXIT_MIN_INSIDE_S, a Wi-Fi side becoming active again means they crossed
-# out. The radar may still see them outside, so the zone drops to "approach" until a new entry.
+# Leaving: once inside for EXIT_MIN_INSIDE_S, a Wi-Fi side rising to ENTRY_EVIDENCE again means
+# they crossed out. The radar may still see them outside, so the zone drops to "approach" until a
+# new entry. The side they left through only counts as an entry again after REENTRY_QUIET_S quiet.
 EXIT_MIN_INSIDE_S = 2.0
+REENTRY_QUIET_S = 2.0
 MOTION_ON_S = 0.3      # radar: seconds of movement before motion turns on
 MOTION_OFF_S = 0.7     # radar: seconds without it before motion turns off
 LINK_ON_S = 0.5        # Wi-Fi side: seconds over the threshold before it counts as active
@@ -355,10 +357,11 @@ def esp1_reader(port, baud, radar, links, links_lock, stats, csi_path):
                                 continue
                             stats.mark(now)
                             mac, rssi, amp = parsed
-                            side = SIDE_BY_MAC.get(mac)
-                            if side:
-                                with links_lock:
-                                    links[side].add(now, rssi, amp)
+                            # Route by board (MAC), so swapping which side is "left" only renames
+                            with links_lock:
+                                link = next((l for l in links.values() if l.mac == mac), None)
+                                if link is not None:
+                                    link.add(now, rssi, amp)
                             if csi_writer:
                                 csi_writer.writerow([round(now, 4), "hub", line])
                         elif line.startswith("RADAR_DATA"):
@@ -485,20 +488,31 @@ class ZoneGate:
         self.present_before = False
         self.exit_at = 0.0
         self.last_rise = {}          # side -> last time its entry evidence started (ENTRY_EVIDENCE)
-        self.prev_active = {}
         self.prev_evidence = {}
+        self.quiet_since = {}        # side -> since when its evidence has been low
+        self.blocked = set()         # sides someone just left through (see REENTRY_QUIET_S)
         self.state = "clear"         # clear | inside | seen_no_entry | left_zone
 
+    def reset_sides(self):
+        """Forget per-side history (after the sides were renamed)."""
+        self.last_rise, self.prev_evidence, self.quiet_since = {}, {}, {}
+        self.blocked = set()
+
     def update(self, now, present, dist_cm, side_active, side_evidence):
-        """side_active: side fully over its threshold. side_evidence: side at ENTRY_EVIDENCE of it."""
-        rose = []   # sides that just became fully active (used for crossing back out)
-        for side, active in side_active.items():
-            if active and not self.prev_active.get(side):
-                rose.append(side)
-            self.prev_active[side] = active
+        """side_evidence: a side at ENTRY_EVIDENCE of its threshold or more. Its rising edges are
+        entries (and, once inside, exits). side_active (fully over) is kept for callers' symmetry."""
+        rose = []   # sides whose evidence just started
         for side, ev in side_evidence.items():
-            if ev and not self.prev_evidence.get(side):
-                self.last_rise[side] = now
+            if ev:
+                self.quiet_since.pop(side, None)
+                if not self.prev_evidence.get(side):
+                    rose.append(side)
+                    if side not in self.blocked:
+                        self.last_rise[side] = now
+            else:
+                since = self.quiet_since.setdefault(side, now)
+                if side in self.blocked and now - since >= REENTRY_QUIET_S:
+                    self.blocked.discard(side)
             self.prev_evidence[side] = ev
 
         if not present:
@@ -517,6 +531,11 @@ class ZoneGate:
             if self.exit_on_crossing and rose and now - self.inside_since >= EXIT_MIN_INSIDE_S:
                 self.inside, self.entry_side, self.inside_since = False, None, None
                 self.exit_at, self.first_seen_cm, self.state = now, None, "left_zone"
+                # Standing just outside keeps stirring that side: it must go quiet before it can
+                # count as a new entry, or they would be counted back in again and again
+                self.blocked.update(rose)
+                for side in rose:
+                    self.last_rise.pop(side, None)
             return
 
         recent = [(t, s) for s, t in self.last_rise.items() if now - t <= ENTRY_WINDOW_S and t > self.exit_at]
@@ -650,8 +669,21 @@ class Calibrator:
                 "message": self.message, "at": self.at, "results": self.results}
 
 
+def apply_sides(links, side_by_mac):
+    """Rename sides from a saved {mac: side} map (after "Swap left/right"). links is changed in place."""
+    objs = list(links.values())
+    wanted = {l.mac: side_by_mac.get(l.mac) for l in objs}
+    if sorted(s for s in wanted.values() if s) != sorted(l.side for l in objs):
+        return False   # incomplete or inconsistent map: keep the current names
+    for l in objs:
+        l.side = wanted[l.mac]
+    links.clear()
+    links.update({l.side: l for l in objs})
+    return True
+
+
 def link_calibration(l):
-    entry = {"side": l.side, "threshold": l.threshold, "baseline": l.baseline}
+    entry = {"side": l.side, "calibrated": l.calibrated, "threshold": l.threshold, "baseline": l.baseline}
     if l.base_shape is not None:
         entry.update({
             "block_threshold": l.block_threshold, "block_baseline": l.block_baseline,
@@ -682,10 +714,12 @@ def load_hub_calibration(links):
     try:
         with open(HUB_CALIBRATION_FILE) as f:
             data = json.load(f)
+        apply_sides(links, {mac: e.get("side") for mac, e in data.get("links", {}).items()})
         for link in links.values():
             entry = data.get("links", {}).get(link.mac)
             if entry:
-                link.threshold, link.calibrated = float(entry["threshold"]), True
+                link.threshold = float(entry["threshold"])
+                link.calibrated = bool(entry.get("calibrated", True))
                 link.baseline = float(entry.get("baseline", DEFAULT_LINK_BASELINE))
                 link.calibrated_at = data.get("created")
                 if entry.get("base_shape") and entry.get("block_threshold"):
@@ -753,6 +787,17 @@ async def run(args):
                 calibrator.start(time.time(), min(max(countdown, 0), 30), min(max(seconds, 5), 60))
             elif cmd.get("type") == "cancel_calibration":
                 calibrator.cancel()
+            elif cmd.get("type") == "swap_sides":
+                # The boards stay the same; only which one is called "left" changes (saved)
+                with links_lock:
+                    if "left" in links and "right" in links:
+                        a, b = links["left"], links["right"]
+                        a.side, b.side = "right", "left"
+                        links["left"], links["right"] = b, a
+                        gate.reset_sides()
+                        save_hub_calibration_all(links)
+                        print(f"sides swapped: left = {links['left'].mac}, right = {links['right'].mac}",
+                              flush=True)
             elif cmd.get("type") == "adjust_threshold":
                 # {"type": "adjust_threshold", "side": "left", "factor": 1.25}: raise or lower one side
                 side, factor = cmd.get("side"), cmd.get("factor")
@@ -861,7 +906,8 @@ async def run(args):
                         "esp1": {"lines_per_s": esp1.rate(now), "garbled": esp1.garbled} if args.esp1 else None,
                         "calibration": calibrator.status(now),
                         "zone": {"state": gate.state, "entry_side": gate.entry_side,
-                                 "entry_logic": gate.enabled, "exit_on_crossing": gate.exit_on_crossing},
+                                 "entry_logic": gate.enabled, "exit_on_crossing": gate.exit_on_crossing,
+                                 "blocked_sides": sorted(gate.blocked)},
                     },
                 }
                 if links:

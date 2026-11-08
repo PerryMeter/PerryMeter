@@ -15,6 +15,8 @@ type SensorPanelProps = {
   onCancelCalibration: () => boolean;
   /** Multiply one side's threshold by factor (for example 1.25 to make it harder to trigger). */
   onAdjustThreshold: (side: string, factor: number) => boolean;
+  /** Swap which board is called left and which right (saved by the hub). */
+  onSwapSides: () => boolean;
 };
 
 type Tone = 'accent' | 'warn' | 'motion' | 'faint';
@@ -266,6 +268,7 @@ export function SensorPanel({
   onCalibrate,
   onCancelCalibration,
   onAdjustThreshold,
+  onSwapSides,
 }: SensorPanelProps) {
   const [sendError, setSendError] = useState<string | null>(null);
 
@@ -284,6 +287,9 @@ export function SensorPanel({
   };
   const handleAdjust = (side: string, factor: number) => {
     setSendError(onAdjustThreshold(side, factor) ? null : 'Not connected to the hub');
+  };
+  const handleSwap = () => {
+    setSendError(onSwapSides() ? null : 'Not connected to the hub');
   };
 
   return (
@@ -371,7 +377,19 @@ export function SensorPanel({
             )}
 
             {debug.links.length > 0 && (
-              <Section title="Wi-Fi sides">
+              <Section
+                title="Wi-Fi sides"
+                aside={
+                  <button
+                    type="button"
+                    onClick={handleSwap}
+                    disabled={!(mode === 'live' && isFresh && !running) || debug.links.length < 2}
+                    className={STEP_BUTTON}
+                  >
+                    Swap left/right
+                  </button>
+                }
+              >
                 {debug.links.map((link) => (
                   <LinkCard
                     key={link.id}
@@ -381,7 +399,7 @@ export function SensorPanel({
                   />
                 ))}
                 <p className="mt-2 text-[11px] text-faint leading-relaxed">
-                  Walk outside the zone near a side: its activity should stay under the marker. If it goes over, press + on that side. Cross the side: it should go over.
+                  Walk outside the zone near a side: its activity should stay under the marker. If it goes over, press + on that side. Cross the side: it should go over. If the wrong side lights up, press Swap left/right.
                 </p>
               </Section>
             )}
