@@ -25,7 +25,7 @@ USE_CALIBRATION = True   # use radar_calibration.json when it exists
 SMOOTH_S = 1.0           # energy is averaged over this many seconds (bigger = steadier, slower)
 
 MIN_DISTANCE_CM = 0      # ignore targets closer than this (e.g. 50 ignores things right at the radar)
-MAX_DISTANCE_CM = 150    # ignore targets farther than this (150 cm is about 59 in)
+MAX_DISTANCE_CM = 250    # ignore targets farther than this (250 cm is about 98 in; the zone's sides are 2 m)
 
 CALIBRATION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "radar_calibration.json")
 THRESHOLD_SOURCE = "fixed numbers in radar_settings.py"
