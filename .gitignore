@@ -36,3 +36,6 @@ data/*
 Thumbs.db
 .vscode/
 .idea/
+
+# Room calibration written by processing/hub.py
+processing/hub_calibration.json

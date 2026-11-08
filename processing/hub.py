@@ -1,42 +1,56 @@
 """Perrymeter hub server: sensors in, one dashboard message out.
 
-Reads the HLK-LD2410C radar through the Feather bridge (firmware/radar_bridge) and
-sends the dashboard message from docs/detection-contract.md about 10 times a second
-over a WebSocket. The radar is the only sensor for now; the Wi-Fi sides plug in here
-later.
+Pick one source:
+    python processing/hub.py --esp1 COM6     ESP1 hub board: Wi-Fi CSI from ESP2 and ESP3 plus the
+                                             radar, all on one USB port (firmware/csi/csi_recv_esp1)
+    python processing/hub.py --radar COM5    the radar alone, through the Feather bridge
+                                             (firmware/radar_bridge)
+    python processing/hub.py --fake-radar    simulated radar, no hardware
 
-    python processing/hub.py --radar COM5                    real radar (use your port)
-    python processing/hub.py --fake-radar                    simulated radar, no hardware
-    python processing/hub.py --radar COM5 --record log.csv   also save every radar frame
+Options:
+    --record frames.csv      save every radar frame with its time
+    --record-csi csi.csv     (with --esp1) save every CSI line as t,label,raw_csi, the same format as
+                             collection/record_csi.py, so Team A's tools can read it
 
 Then open the dashboard in Live mode, for example http://localhost:5173/?mode=live
-(from another computer: ?mode=live&ws=ws://<this-computer's-IP>:8765).
+(from another computer: ?mode=live&ws=ws://<this-computer's-IP>:8765). Its Sensors panel shows
+the live numbers below and has the Calibrate button.
 
 What the dashboard gets
-    alert       "inside"   the radar sees a person in the zone, moving or still (the rule
-                           in radar_settings.py). It stays on for HOLD_S after the radar
-                           loses them, so the radar's flicker does not flash the screen.
-                "approach" the radar sees someone beyond the zone, up to --approach-cm
+    alert       "inside"   the radar sees a person in the zone, moving or still (the rule in
+                           radar_settings.py), held for HOLD_S after it loses them
+                "approach" a Wi-Fi side is active, or the radar sees someone beyond the zone
                 "clear"    otherwise
-    motion      the person is moving, with a short on/off delay
-    strength    radar movement energy averaged over SMOOTH_S, 0 to 1
-    confidence  how clearly that energy sits on one side of the threshold (a heuristic,
-                not a probability)
+    links       one per Wi-Fi side ("left" = ESP2, "right" = ESP3): motion is "someone is at this
+                side", strength is the activity score relative to that side's threshold
+    nodes       hub, the Wi-Fi sides and the radar, each online while its data arrives
+    motion      something is moving: a side is active or the radar sees a moving person
+    strength    the highest of the side strengths and the radar movement energy, 0 to 1
     distance_m  radar distance to the person while one is detected, otherwise null
-    nodes       hub and radar; the Wi-Fi sides are not installed yet
-If the radar sends nothing for STALE_S, the hub sends nothing either, so the dashboard
-shows that the data stopped instead of a false CLEAR.
+    debug       the raw numbers for the Sensors panel (the dashboard's main view ignores it)
+If no sensor data arrives for STALE_S, the hub sends nothing, so the dashboard shows that the data
+stopped instead of a false CLEAR.
 
-Thresholds, distance limits and averaging come from radar_settings.py at the repo root
-(and radar_calibration.json when it exists), so this hub, radar_plot.py and
-radar_server.py always apply the same rule. Run radar_calibrate.py after moving the radar.
+Calibration ("calibrate" command from the dashboard, or --calibrate-on-start): after a countdown
+to leave the area, the hub measures the empty zone and sets
+    each Wi-Fi side's threshold   CALIBRATION_MARGIN x the 95th percentile of its empty score
+    the radar thresholds          99th percentile of the empty energy + 10, at least 20, at most
+                                  100 (the same method as radar_calibrate.py)
+Results are saved to processing/hub_calibration.json and radar_calibration.json (shared with
+radar_plot.py and radar_server.py), and loaded again at start.
 
-Needs: pip install pyserial websockets
+Wi-Fi activity score: for each 0.5 s window, every packet's amplitudes are divided by that
+packet's median amplitude (this removes automatic gain changes), and the score is the median,
+over the usable subcarriers, of how much each one varies. A quiet link scores low; a person near
+the link raises it.
+
+Needs: pip install pyserial websockets numpy
 """
 import argparse
 import asyncio
 import collections
 import csv
+import datetime
 import json
 import os
 import random
@@ -44,31 +58,47 @@ import sys
 import threading
 import time
 
+import numpy as np
 from websockets.asyncio.server import broadcast, serve
 
 # Omar's radar settings and frame parser live at the repo root
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, REPO_ROOT)
 import radar_settings as rs  # noqa: E402
 from radar_server import read_frames  # noqa: E402
 
-BAUD = 921600        # must match Serial.begin(...) in firmware/radar_bridge
-SEND_RATE = 10       # messages per second to the dashboard
-STALE_S = 1.0        # no radar frame for this long: send nothing
-HOLD_S = 1.5         # "inside" stays on this long after the radar loses the person
-MOTION_ON_S = 0.3    # seconds of movement before motion turns on
-MOTION_OFF_S = 0.7   # seconds without movement before motion turns off
+BAUD = 921600          # radar bridge and ESP1 both use 921600
+SEND_RATE = 10         # messages per second to the dashboard
+STALE_S = 1.0          # no data for this long: send nothing
+HOLD_S = 1.5           # "inside" stays on this long after the radar loses the person
+MOTION_ON_S = 0.3      # seconds of activity before motion turns on
+MOTION_OFF_S = 0.7     # seconds without it before motion turns off
+LINK_WINDOW_S = 0.5    # Wi-Fi activity window
+LINK_MIN_PACKETS = 4   # fewer packets than this in a window: no score (a side can drop to about 14/s)
+LINK_OFFLINE_S = 2.0   # no packet from a side for this long: that node is offline
+DEFAULT_LINK_THRESHOLD = 0.15   # used until the first calibration
+CALIBRATION_MARGIN = 1.2
+CALIBRATION_FLOOR = 0.02
+SIDE_BY_MAC = {"1a:00:00:00:00:02": "left", "1a:00:00:00:00:03": "right"}
+HUB_CALIBRATION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hub_calibration.json")
 STATES = {0: "nobody", 1: "moving", 2: "still", 3: "moving+still"}
+
+
+def now_text():
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
 # ---- radar input -----------------------------------------------------------
 class Radar:
-    """Latest radar frame plus energies averaged over rs.SMOOTH_S, shared with the server loop."""
+    """Latest radar frame plus energies averaged over rs.SMOOTH_S."""
 
     def __init__(self, record_path=None):
         self._lock = threading.Lock()
         self._recent = collections.deque()  # (time, moving_energy, still_energy)
-        self.frame, self.time, self.count = None, 0.0, 0
+        self._times = collections.deque()   # frame times over the last second, for frames/s
+        self.frame, self.time = None, 0.0
         self.avg_m = self.avg_s = 0.0
+        self.status = None                  # last RADAR_STATUS line from ESP1
         self._writer = self._file = None
         if record_path:
             self._file = open(record_path, "w", newline="")
@@ -80,7 +110,9 @@ class Radar:
         now = time.time()
         with self._lock:
             self.frame, self.time = frame, now
-            self.count += 1
+            self._times.append(now)
+            while now - self._times[0] > 1.0:
+                self._times.popleft()
             self._recent.append((now, frame[2], frame[4]))
             while now - self._recent[0][0] > rs.SMOOTH_S:
                 self._recent.popleft()
@@ -89,23 +121,165 @@ class Radar:
             self.avg_s = sum(r[2] for r in self._recent) / n
             if self._writer:
                 self._writer.writerow([round(now, 3), *frame])
-                if self.count % 50 == 0:
+                if len(self._times) == 1:
                     self._file.flush()
 
     def get(self):
         with self._lock:
-            return self.frame, self.time, self.count, self.avg_m, self.avg_s
+            fps = len(self._times) if self._times and time.time() - self._times[-1] < 1.0 else 0
+            return self.frame, self.time, self.avg_m, self.avg_s, fps
+
+
+# ---- Wi-Fi links -----------------------------------------------------------
+class Link:
+    """One Wi-Fi side: recent packets, activity score, threshold and motion."""
+
+    def __init__(self, side, mac):
+        self.side, self.mac = side, mac
+        self.packets = collections.deque()   # (t, rssi, amplitudes)
+        self.threshold = DEFAULT_LINK_THRESHOLD
+        self.calibrated = False
+        self.calibrated_at = None
+        self.score = None
+        self.motion = False
+        self._delay = Delay(MOTION_ON_S, MOTION_OFF_S)
+
+    def add(self, t, rssi, amp):
+        self.packets.append((t, rssi, amp))
+        while self.packets and t - self.packets[0][0] > 2.0:
+            self.packets.popleft()
+
+    def update(self, now):
+        """Recompute the score from the last LINK_WINDOW_S and update motion."""
+        recent = [p for p in self.packets if now - p[0] <= 2.0]
+        window = [p for p in recent if now - p[0] <= LINK_WINDOW_S]
+        self.score = None
+        if len(window) >= LINK_MIN_PACKETS and len(recent) >= LINK_MIN_PACKETS:
+            with np.errstate(all="ignore"):
+                ref = np.nanmedian(np.stack([p[2] for p in recent]), axis=0)
+                good = np.isfinite(ref) & (ref > 6)
+                if good.sum() >= 8:
+                    a = np.stack([p[2] for p in window])[:, good]
+                    shape = a / np.maximum(np.nanmedian(a, axis=1, keepdims=True), 2.0)
+                    self.score = float(np.nanmedian(np.nanstd(shape, axis=0)))
+        if self.score is None:
+            want = False
+        else:
+            want = self.score >= (0.8 * self.threshold if self.motion else self.threshold)
+        self.motion = self._delay.update(want, now)
+        return self.score
+
+    def stats(self, now):
+        last_s = [p for p in self.packets if now - p[0] <= 1.0]
+        online = bool(self.packets) and now - self.packets[-1][0] <= LINK_OFFLINE_S
+        rssi = int(np.median([p[1] for p in last_s])) if last_s else None
+        return online, len(last_s), rssi
+
+    def strength(self):
+        return 0.0 if self.score is None else min(1.0, self.score / (2 * self.threshold))
+
+
+class Esp1Stats:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.line_times = collections.deque()
+        self.last_line = 0.0
+        self.garbled = 0
+
+    def mark(self, now):
+        with self.lock:
+            self.last_line = now
+            self.line_times.append(now)
+            while now - self.line_times[0] > 1.0:
+                self.line_times.popleft()
+
+    def rate(self, now):
+        with self.lock:
+            return len(self.line_times) if now - self.last_line < 1.0 else 0
+
+
+def parse_csi(line):
+    """Return (mac, rssi, amplitudes) from a CSI_DATA line, or None."""
+    parts = line.split(",", 24)
+    if len(parts) != 25 or parts[22] != "384":
+        return None
+    data = parts[24].strip()
+    if not (data.startswith('"[') and data.endswith(']"')):
+        return None
+    try:
+        nums = np.array(data[2:-2].split(","), dtype=np.float32)
+        rssi = int(parts[3])
+    except ValueError:
+        return None
+    if nums.size != 384:
+        return None
+    amp = np.hypot(nums[0::2], nums[1::2])
+    if parts[23] == "1":     # first_word_invalid: the first two I/Q pairs are not real
+        amp[:2] = np.nan
+    return parts[2], rssi, amp
+
+
+def esp1_reader(port, baud, radar, links, links_lock, stats, csi_path):
+    """Read ESP1's combined stream forever: CSI_DATA, RADAR_DATA and RADAR_STATUS lines."""
+    import serial
+
+    csi_file = open(csi_path, "a", newline="") if csi_path else None
+    csi_writer = csv.writer(csi_file) if csi_file else None
+    if csi_file and csi_file.tell() == 0:
+        csi_writer.writerow(["t", "label", "raw_csi"])
+    while True:
+        try:
+            ser = serial.Serial()
+            ser.port, ser.baudrate, ser.timeout = port, baud, 1
+            ser.dtr = False   # toggling DTR/RTS resets the ESP32
+            ser.rts = False
+            ser.open()
+            with ser:
+                print(f"ESP1: opened {port}", flush=True)
+                buf = b""
+                while True:
+                    buf += ser.read(ser.in_waiting or 1)
+                    *lines, buf = buf.split(b"\n")
+                    for raw in lines:
+                        line = raw.decode("ascii", "replace").strip()
+                        now = time.time()
+                        if line.startswith("CSI_DATA"):
+                            parsed = parse_csi(line)
+                            if parsed is None:
+                                stats.garbled += 1
+                                continue
+                            stats.mark(now)
+                            mac, rssi, amp = parsed
+                            side = SIDE_BY_MAC.get(mac)
+                            if side:
+                                with links_lock:
+                                    links[side].add(now, rssi, amp)
+                            if csi_writer:
+                                csi_writer.writerow([round(now, 4), "hub", line])
+                        elif line.startswith("RADAR_DATA"):
+                            p = line.split(",")
+                            if len(p) == 8 and all(x.isdigit() for x in p[1:]):
+                                stats.mark(now)
+                                radar.put(tuple(int(x) for x in p[2:]))
+                            else:
+                                stats.garbled += 1
+                        elif line.startswith("RADAR_STATUS"):
+                            radar.status = line
+                            print(f"ESP1: {line}", flush=True)
+        except serial.SerialException as e:
+            print(f"ESP1: problem on {port}: {e} (retrying in 2 s)", flush=True)
+            time.sleep(2)
 
 
 def serial_reader(port, baud, radar):
-    """Read the real radar forever; reopen the port if the cable is pulled."""
+    """Radar alone through the Feather bridge; reopen the port if the cable is pulled."""
     import serial
 
     while True:
         try:
             ser = serial.Serial()
             ser.port, ser.baudrate, ser.timeout = port, baud, 1
-            ser.dtr = False  # toggling DTR/RTS can reset the ESP32
+            ser.dtr = False
             ser.rts = False
             ser.open()
             with ser:
@@ -118,8 +292,7 @@ def serial_reader(port, baud, radar):
 
 
 def fake_reader(radar, approach_cm):
-    """Simulated radar, 20 s cycle: nobody, someone walking in the zone, the same person
-    standing still, then someone walking past beyond the zone."""
+    """Simulated radar, 20 s cycle: nobody, walking in the zone, standing still, someone beyond it."""
     move_e = 100
     still_e = min(100, rs.STILL_THRESHOLD + 25)
     far_cm = min(approach_cm, rs.MAX_DISTANCE_CM + 150)
@@ -140,7 +313,7 @@ def fake_reader(radar, approach_cm):
         time.sleep(0.1)
 
 
-# ---- turning radar frames into the dashboard message -----------------------
+# ---- decisions ---------------------------------------------------------------
 class Delay:
     """A boolean that turns on after on_s seconds of True and off after off_s seconds of False."""
 
@@ -159,8 +332,8 @@ class Delay:
         return self.state
 
 
-class ZoneLogic:
-    """Applies Omar's rule (radar_settings.classify) and adds the alert level."""
+class RadarLogic:
+    """Omar's rule (radar_settings.classify) plus the inside hold and the beyond-the-zone check."""
 
     def __init__(self, approach_cm):
         self.approach_cm = approach_cm
@@ -169,7 +342,6 @@ class ZoneLogic:
         self.last_inside_cm = None
 
     def far_target_cm(self, frame, avg_m, avg_s):
-        """Distance of a person the radar sees beyond the zone, or None."""
         state, m_cm, _, s_cm, _, _ = frame
         lo, hi = rs.MAX_DISTANCE_CM, self.approach_cm
         if state in (1, 3) and avg_m >= rs.MOVING_THRESHOLD and lo < m_cm <= hi:
@@ -178,109 +350,306 @@ class ZoneLogic:
             return s_cm
         return None
 
-    def message(self, frame, avg_m, avg_s, now):
+    def update(self, frame, avg_m, avg_s, now):
         _state, m_cm, _m_en, s_cm, _s_en, _d_cm = frame
         prediction, dist_cm = rs.classify(avg_m, avg_s, m_cm, s_cm)
-
         if prediction != "nothing":
             self.last_inside_at, self.last_inside_cm = now, dist_cm
         holding = self.last_inside_at is not None and now - self.last_inside_at < HOLD_S
         far_cm = None if holding else self.far_target_cm(frame, avg_m, avg_s)
+        moving = self.motion.update(prediction == "moving", now)
+        return {"prediction": prediction, "inside": holding,
+                "inside_cm": self.last_inside_cm if holding else None,
+                "far_cm": far_cm, "moving": moving}
 
-        if holding:
-            alert, distance_cm = "inside", self.last_inside_cm
-        elif far_cm is not None:
-            alert, distance_cm = "approach", far_cm
+
+# ---- calibration -------------------------------------------------------------
+class Calibrator:
+    """countdown -> measuring the empty zone -> done (thresholds applied and saved) or failed."""
+
+    def __init__(self):
+        self.state = "idle"
+        self.until = 0.0
+        self.measure_s = 15.0
+        self.scores = collections.defaultdict(list)
+        self.radar_m, self.radar_s = [], []
+        self.message = "Not calibrated in this session"
+        self.results = None
+        self.at = None
+
+    def start(self, now, countdown_s, measure_s):
+        self.state, self.until, self.measure_s = "countdown", now + countdown_s, measure_s
+        self.scores = collections.defaultdict(list)
+        self.radar_m, self.radar_s = [], []
+        self.message = f"Leave the zone. Measuring starts in {countdown_s:g} s"
+        print(f"calibration: countdown {countdown_s:g} s, then {measure_s:g} s", flush=True)
+
+    def cancel(self):
+        if self.state in ("countdown", "measuring"):
+            self.state, self.message = "idle", "Calibration cancelled"
+            print("calibration: cancelled", flush=True)
+
+    def collect(self, links, radar_sample):
+        for side, link in links.items():
+            if link.score is not None:
+                self.scores[side].append(link.score)
+        if radar_sample is not None:
+            m, s = radar_sample
+            self.radar_m.append(m)
+            self.radar_s.append(s)
+
+    def tick(self, now, links, radar_sample):
+        if self.state == "countdown":
+            if now >= self.until:
+                self.state, self.until = "measuring", now + self.measure_s
+                self.message = f"Measuring the empty zone for {self.measure_s:g} s. Stay out of it"
+                print("calibration: measuring", flush=True)
+        elif self.state == "measuring":
+            self.collect(links, radar_sample)
+            if now >= self.until:
+                self.finish(links)
+
+    def finish(self, links):
+        results, problems, warnings = {"links": {}, "radar": None}, [], []
+        for side, link in links.items():
+            vals = self.scores.get(side, [])
+            if len(vals) < 20:
+                problems.append(f"{side} side: too little Wi-Fi data ({len(vals)} windows)")
+                continue
+            p95 = float(np.percentile(vals, 95))
+            link.threshold = round(max(CALIBRATION_FLOOR, CALIBRATION_MARGIN * p95), 4)
+            link.calibrated, link.calibrated_at = True, now_text()
+            results["links"][side] = {"mac": link.mac, "threshold": link.threshold,
+                                      "empty_median": round(float(np.median(vals)), 4),
+                                      "empty_p95": round(p95, 4), "windows": len(vals)}
+        if len(self.radar_m) >= 20:
+            pm = float(np.percentile(self.radar_m, 99))
+            ps = float(np.percentile(self.radar_s, 99))
+            mt = round(min(100, max(20, pm + 10)))
+            st = round(min(100, max(20, ps + 10)))
+            rs.MOVING_THRESHOLD, rs.STILL_THRESHOLD = mt, st
+            rs.THRESHOLD_SOURCE = f"hub calibration at {now_text()}"
+            results["radar"] = {"moving_threshold": mt, "still_threshold": st,
+                                "empty_movement_p99": round(pm, 1), "empty_stillness_p99": round(ps, 1)}
+            for name, t in (("movement", mt), ("stillness", st)):
+                if t >= 95:
+                    warnings.append(f"radar {name} threshold is {t}: something in view was moving or "
+                                    "very close during calibration")
+            save_radar_calibration(mt, st, pm, ps, len(self.radar_m))
         else:
-            alert, distance_cm = "clear", None
+            problems.append("radar: too few readings")
+        save_hub_calibration(links)
+        self.results, self.at = results, now_text()
+        if problems and not results["links"] and results["radar"] is None:
+            self.state, self.message = "failed", "; ".join(problems)
+        else:
+            self.state = "done"
+            self.message = "Calibrated" + (". " + "; ".join(problems + warnings) if problems or warnings else "")
+        print(f"calibration: {self.state}: {json.dumps(results)} {self.message}", flush=True)
 
-        motion = self.motion.update(prediction == "moving", now)
-        strength = min(1.0, avg_m / 100)
-        margin = min(1.0, abs(avg_m - rs.MOVING_THRESHOLD) / rs.MOVING_THRESHOLD)
-        agrees = (avg_m >= rs.MOVING_THRESHOLD) == motion
-        confidence = 0.5 + 0.5 * margin if agrees else 0.5
-
-        return {
-            "t": round(now, 3),
-            "motion": motion,
-            "strength": round(strength, 3),
-            "confidence": round(confidence, 3),
-            "alert": alert,
-            "distance_m": round(distance_cm / 100, 2) if distance_cm is not None else None,
-            "nodes": [{"id": "hub", "online": True}, {"id": "radar", "online": True}],
-            # Extra detail for debugging; the dashboard ignores fields it does not know
-            "radar": {
-                "prediction": prediction,
-                "moving_energy": round(avg_m, 1),
-                "still_energy": round(avg_s, 1),
-                "moving_threshold": rs.MOVING_THRESHOLD,
-                "still_threshold": rs.STILL_THRESHOLD,
-            },
-        }
+    def status(self, now):
+        remaining = max(0.0, self.until - now) if self.state in ("countdown", "measuring") else None
+        return {"state": self.state, "remaining_s": None if remaining is None else round(remaining, 1),
+                "message": self.message, "at": self.at, "results": self.results}
 
 
-# ---- the WebSocket server --------------------------------------------------
+def save_hub_calibration(links):
+    data = {"created": now_text(), "margin": CALIBRATION_MARGIN,
+            "links": {l.mac: {"side": l.side, "threshold": l.threshold} for l in links.values() if l.calibrated}}
+    with open(HUB_CALIBRATION_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def load_hub_calibration(links):
+    if not os.path.exists(HUB_CALIBRATION_FILE):
+        return None
+    try:
+        with open(HUB_CALIBRATION_FILE) as f:
+            data = json.load(f)
+        for link in links.values():
+            entry = data.get("links", {}).get(link.mac)
+            if entry:
+                link.threshold, link.calibrated = float(entry["threshold"]), True
+                link.calibrated_at = data.get("created")
+        return data.get("created")
+    except (OSError, ValueError, KeyError) as e:
+        print(f"Could not read {HUB_CALIBRATION_FILE} ({e}); using the default thresholds.", flush=True)
+        return None
+
+
+def save_radar_calibration(mt, st, pm, ps, n):
+    data = {"moving_threshold": mt, "still_threshold": st, "created": now_text(),
+            "readings": n, "empty_room_movement_p99": round(pm, 1), "empty_room_stillness_p99": round(ps, 1),
+            "margin": 10, "floor": 20, "distance_range_cm": [rs.MIN_DISTANCE_CM, rs.MAX_DISTANCE_CM],
+            "source": "processing/hub.py"}
+    with open(rs.CALIBRATION_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+# ---- the WebSocket server ------------------------------------------------------
 async def run(args):
     radar = Radar(args.record)
-    if args.fake_radar:
+    links = {side: Link(side, mac) for mac, side in SIDE_BY_MAC.items()} if args.esp1 else {}
+    links_lock = threading.Lock()
+    esp1 = Esp1Stats()
+    calibrator = Calibrator()
+    if args.esp1:
+        when = load_hub_calibration(links)
+        if when:
+            calibrator.message, calibrator.at = f"Using the calibration from {when}", when
+        target, targs = esp1_reader, (args.esp1, args.baud, radar, links, links_lock, esp1, args.record_csi)
+    elif args.fake_radar:
         target, targs = fake_reader, (radar, args.approach_cm)
         print("Radar: SIMULATED data", flush=True)
     else:
         target, targs = serial_reader, (args.radar, args.baud, radar)
     threading.Thread(target=target, args=targs, daemon=True).start()
-    logic = ZoneLogic(args.approach_cm)
+    logic = RadarLogic(args.approach_cm)
+    loop_start = time.time()
+    if args.calibrate_on_start:
+        calibrator.start(time.time(), args.countdown, args.calibration_seconds)
 
     async def handler(websocket):
-        await websocket.wait_closed()
+        async for raw in websocket:
+            try:
+                cmd = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(cmd, dict):
+                continue
+            if cmd.get("type") == "calibrate":
+                countdown = float(cmd.get("countdown_s", args.countdown))
+                seconds = float(cmd.get("seconds", args.calibration_seconds))
+                calibrator.start(time.time(), min(max(countdown, 0), 30), min(max(seconds, 5), 60))
+            elif cmd.get("type") == "cancel_calibration":
+                calibrator.cancel()
 
     async with serve(handler, args.host, args.port) as server:
         print(f"Perrymeter hub on ws://{args.host}:{args.port} (Ctrl+C to stop)", flush=True)
         print(f"Radar rule: moving if movement >= {rs.MOVING_THRESHOLD}, else still if stillness >= "
-              f"{rs.STILL_THRESHOLD}; zone {rs.MIN_DISTANCE_CM}-{rs.MAX_DISTANCE_CM} cm, approach up to "
-              f"{args.approach_cm} cm; {rs.SMOOTH_S:g} s average. Thresholds from {rs.THRESHOLD_SOURCE}.",
-              flush=True)
-        if args.record:
-            print(f"Recording every radar frame to {args.record}", flush=True)
-        last_status, last_count, last_alert = time.time(), 0, None
+              f"{rs.STILL_THRESHOLD}; zone {rs.MIN_DISTANCE_CM}-{rs.MAX_DISTANCE_CM} cm; thresholds from "
+              f"{rs.THRESHOLD_SOURCE}.", flush=True)
+        for link in links.values():
+            print(f"Wi-Fi {link.side} = {link.mac}, threshold {link.threshold}"
+                  f"{'' if link.calibrated else ' (default, not calibrated)'}", flush=True)
+        last_status, last_alert = time.time(), None
         while True:
             await asyncio.sleep(1.0 / args.rate)
             now = time.time()
-            frame, frame_time, count, avg_m, avg_s = radar.get()
-            msg = None
-            if frame is not None and now - frame_time <= STALE_S:
-                msg = logic.message(frame, avg_m, avg_s, now)
+            frame, frame_time, avg_m, avg_s, radar_fps = radar.get()
+            radar_fresh = frame is not None and now - frame_time <= STALE_S
+
+            with links_lock:
+                for link in links.values():
+                    link.update(now)
+                link_info = {s: (l.stats(now), l.score, l.threshold, l.calibrated, l.motion, l.strength())
+                             for s, l in links.items()}
+
+            r = logic.update(frame, avg_m, avg_s, now) if radar_fresh else None
+            radar_sample = None
+            if radar_fresh:
+                m_in = avg_m if rs.MIN_DISTANCE_CM <= frame[1] <= rs.MAX_DISTANCE_CM else 0.0
+                s_in = avg_s if rs.MIN_DISTANCE_CM <= frame[3] <= rs.MAX_DISTANCE_CM else 0.0
+                radar_sample = (m_in, s_in)
+            calibrator.tick(now, links, radar_sample)
+
+            any_link_fresh = any(info[0][0] for info in link_info.values())
+            if not radar_fresh and not any_link_fresh:
+                msg = None
+            else:
+                side_active = [s for s, info in link_info.items() if info[0][0] and info[4]]
+                if r and r["inside"]:
+                    alert, distance_cm = "inside", r["inside_cm"]
+                elif side_active or (r and r["far_cm"] is not None):
+                    alert, distance_cm = "approach", (r["far_cm"] if r else None)
+                else:
+                    alert, distance_cm = "clear", None
+                radar_strength = min(1.0, avg_m / 100) if radar_fresh else 0.0
+                strengths = [info[5] for info in link_info.values() if info[0][0]] + [radar_strength]
+                strength = max(strengths)
+                motion = bool(side_active) or bool(r and r["moving"])
+                margin = min(1.0, abs(avg_m - rs.MOVING_THRESHOLD) / rs.MOVING_THRESHOLD) if radar_fresh else 0.0
+                agrees = (avg_m >= rs.MOVING_THRESHOLD) == bool(r and r["moving"])
+                confidence = 0.5 + 0.5 * margin if radar_fresh and agrees else 0.5
+
+                msg = {
+                    "t": round(now, 3),
+                    "motion": motion,
+                    "strength": round(strength, 3),
+                    "confidence": round(confidence, 3),
+                    "alert": alert,
+                    "distance_m": round(distance_cm / 100, 2) if distance_cm is not None else None,
+                    "nodes": [{"id": "hub", "online": True}]
+                             + [{"id": s, "online": info[0][0]} for s, info in link_info.items()]
+                             + [{"id": "radar", "online": radar_fresh}],
+                    "debug": {
+                        "source": "esp1" if args.esp1 else ("fake-radar" if args.fake_radar else "radar-bridge"),
+                        "uptime_s": round(now - loop_start),
+                        "links": [{"id": s, "mac": links[s].mac, "online": info[0][0], "pps": info[0][1],
+                                   "rssi": info[0][2],
+                                   "score": None if info[1] is None else round(info[1], 4),
+                                   "threshold": info[2], "calibrated": info[3], "motion": info[4]}
+                                  for s, info in link_info.items()],
+                        "radar": None if not radar_fresh else {
+                            "fps": radar_fps, "state": frame[0], "state_name": STATES.get(frame[0], str(frame[0])),
+                            "moving_cm": frame[1], "moving_energy": frame[2], "still_cm": frame[3],
+                            "still_energy": frame[4], "detect_cm": frame[5],
+                            "avg_moving": round(avg_m, 1), "avg_still": round(avg_s, 1),
+                            "moving_threshold": rs.MOVING_THRESHOLD, "still_threshold": rs.STILL_THRESHOLD,
+                            "zone_cm": [rs.MIN_DISTANCE_CM, rs.MAX_DISTANCE_CM],
+                            "prediction": r["prediction"], "status": radar.status},
+                        "esp1": {"lines_per_s": esp1.rate(now), "garbled": esp1.garbled} if args.esp1 else None,
+                        "calibration": calibrator.status(now),
+                    },
+                }
+                if links:
+                    msg["links"] = [{"id": s, "motion": info[4], "strength": round(info[5], 3),
+                                     **({"rssi": info[0][2]} if info[0][2] is not None else {}),
+                                     "pps": info[0][1]}
+                                    for s, info in link_info.items() if info[0][0]]
                 broadcast(server.connections, json.dumps(msg))
-                if msg["alert"] != last_alert:
-                    print(f"alert: {msg['alert']}", flush=True)
-                    last_alert = msg["alert"]
+                if alert != last_alert:
+                    print(f"alert: {alert}", flush=True)
+                    last_alert = alert
 
             if now - last_status >= 1.0:
-                fps, last_count, last_status = count - last_count, count, now
-                clients = len(server.connections)
-                if msg is None:
-                    print(f"no radar data  clients={clients}", flush=True)
+                last_status = now
+                parts = []
+                if args.esp1:
+                    parts.append(f"esp1 {esp1.rate(now)} lines/s")
+                for s, info in link_info.items():
+                    (online, pps, rssi), score, thr = info[0], info[1], info[2]
+                    sc = "--" if score is None else f"{score:.3f}"
+                    parts.append(f"{s} {pps}/s {rssi}dBm {sc}/{thr:g}{' ACTIVE' if info[4] else ''}"
+                                 if online else f"{s} offline")
+                if radar_fresh:
+                    parts.append(f"radar {radar_fps}/s {r['prediction']} {frame[1]}/{frame[3]}cm")
                 else:
-                    r = msg["radar"]
-                    print(f"{fps:3d} frames/s  {STATES.get(frame[0], frame[0]):12} -> {r['prediction']:8} "
-                          f"alert={msg['alert']:8} motion={'yes' if msg['motion'] else 'no ':3} "
-                          f"distance={msg['distance_m']}  energy move {r['moving_energy']:5.1f} "
-                          f"still {r['still_energy']:5.1f}  clients={clients}", flush=True)
+                    parts.append("radar no data")
+                parts.append(f"alert {msg['alert'] if msg else '-'}")
+                if calibrator.state in ("countdown", "measuring"):
+                    parts.append(f"calibration {calibrator.state} {calibrator.until - now:.0f}s")
+                print(" | ".join(parts) + f" | clients {len(server.connections)}", flush=True)
 
 
 def main():
-    p = argparse.ArgumentParser(description="Perrymeter hub: radar in, dashboard messages out")
-    p.add_argument("--radar", help="serial port of the radar bridge, e.g. COM5 or /dev/ttyACM0")
-    p.add_argument("--fake-radar", action="store_true", help="use simulated radar data")
+    p = argparse.ArgumentParser(description="Perrymeter hub: sensors in, dashboard messages out")
+    src = p.add_mutually_exclusive_group(required=True)
+    src.add_argument("--esp1", help="ESP1 hub board's serial port (Wi-Fi CSI and radar), e.g. COM6")
+    src.add_argument("--radar", help="radar Feather bridge's serial port, e.g. COM5")
+    src.add_argument("--fake-radar", action="store_true", help="simulated radar data")
     p.add_argument("--baud", type=int, default=BAUD)
     p.add_argument("--approach-cm", type=int, default=600,
-                   help="someone seen beyond the zone but within this distance counts as approach")
-    p.add_argument("--record", help="also save every radar frame to this CSV file")
+                   help="someone the radar sees beyond the zone but within this distance counts as approach")
+    p.add_argument("--record", help="save every radar frame to this CSV file")
+    p.add_argument("--record-csi", help="(with --esp1) append every CSI line to this CSV file")
+    p.add_argument("--calibrate-on-start", action="store_true", help="calibrate as soon as the hub starts")
+    p.add_argument("--countdown", type=float, default=5, help="seconds to leave the zone before calibrating")
+    p.add_argument("--calibration-seconds", type=float, default=15, help="how long to measure the empty zone")
     p.add_argument("--host", default="0.0.0.0", help="0.0.0.0 lets other computers connect")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--rate", type=float, default=SEND_RATE, help="messages per second")
     args = p.parse_args()
-    if not args.fake_radar and not args.radar:
-        p.error("give the radar's serial port (--radar COM5) or --fake-radar")
     try:
         asyncio.run(run(args))
     except KeyboardInterrupt:
