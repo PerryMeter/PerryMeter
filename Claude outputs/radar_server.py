@@ -34,7 +34,7 @@ SEND_RATE = 10      # messages per second to the dashboard (or use --rate)
 MIN_DISTANCE_CM = 0      # ignore targets closer than this (e.g. 50 ignores things right at the radar)
 MAX_DISTANCE_CM = 150    # ignore targets farther than this (e.g. 300 = only within 3 m)
 MIN_MOVING_ENERGY = 60    # ignore movement weaker than this (0-100)
-MIN_STILL_ENERGY = 100     # ignore still targets weaker than this (0-100)
+MIN_STILL_ENERGY = 90     # ignore still targets weaker than this (0-100)
 
 HEAD = b"\xF4\xF3\xF2\xF1"
 TAIL = b"\xF8\xF7\xF6\xF5"
