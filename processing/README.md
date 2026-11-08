@@ -60,6 +60,28 @@ Then open the dashboard with `?mode=live` (from another device: `?mode=live&ws=w
 
 Test on 2026-11-07, replaying `no_movement` → `walking_between` → `no_movement`: 10.0 messages/s, 0 invalid, ALERT about 2 s into `walking_between`, back to clear about 4 s after it ended. The first 5 s of `no_movement` also raise a short false alarm. That comes from the recording, not the server: the summary above flags 8% of that file as movement.
 
+## Hub server (`hub.py`), radar for now
+
+The server for the demo. It reads the LD2410C radar through the Feather bridge (`firmware/radar_bridge`) and sends the dashboard message on `ws://0.0.0.0:8765` about 10 times a second. The Wi-Fi sides will be added to this same server.
+
+```bash
+pip install pyserial websockets
+python processing/hub.py --radar COM5                    # real radar (use your port; on the Pi, /dev/serial/by-id/...)
+python processing/hub.py --fake-radar                    # simulated radar, no hardware
+python processing/hub.py --radar COM5 --record log.csv   # also save every radar frame with its time
+```
+
+Then open the dashboard with `?mode=live`.
+
+- **Rule:** Omar's, from `radar_settings.py` at the repo root (thresholds from `radar_calibration.json` when it exists, 0 to 150 cm, 1 s average), so the hub, `radar_plot.py` and `radar_server.py` always agree. Run `radar_calibrate.py` after moving the radar.
+- **Alert:** `inside` while the radar sees a person in the zone, **moving or still**, and for 1.5 s after it loses them (the radar flickers). `approach` when it sees someone beyond the zone, up to `--approach-cm` (600). Otherwise `clear`.
+- **Motion:** true while the person is moving, so the dashboard shows `not moving` for someone standing still inside.
+- **Nodes:** `hub` and `radar`. No `links` yet, so the dashboard draws the Wi-Fi sides as not installed.
+- **No data:** if the radar sends nothing for 1 s, the hub sends nothing, so the dashboard shows that data stopped instead of a false CLEAR.
+- **Extra field:** `radar` (prediction, averaged energies, thresholds) for debugging. The dashboard ignores it.
+
+Test on 2026-11-07 with `--fake-radar`: clear, then inside while walking, still inside with `motion` false while standing, approach for someone beyond the zone, then clear; 0 contract problems. With the real radar on COM5: inside, moving and still, at 0.45 to 1.5 m, about 9 messages/s, and the dashboard showed ALERT, `not moving` and the distance arc with 0 invalid messages.
+
 ## Suggested tooling
 
 - Python 3.10+, `numpy`, `scipy`, `pandas`, `matplotlib`/Jupyter for exploration
