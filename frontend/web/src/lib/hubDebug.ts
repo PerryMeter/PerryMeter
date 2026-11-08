@@ -12,6 +12,8 @@ export type HubLinkDebug = {
   rssi: number | null;
   score: number | null;
   threshold: number | null;
+  /** Typical empty-zone score from the last calibration. */
+  baseline: number | null;
   calibrated: boolean;
   motion: boolean;
 };
@@ -40,6 +42,14 @@ export type HubCalibration = {
   at: string | null;
 };
 
+export type HubZone = {
+  /** clear | inside | seen_no_entry | left_zone */
+  state: string | null;
+  entrySide: string | null;
+  entryLogic: boolean;
+  exitOnCrossing: boolean;
+};
+
 export type HubDebug = {
   source: string | null;
   uptimeS: number | null;
@@ -47,6 +57,7 @@ export type HubDebug = {
   radar: HubRadarDebug | null;
   esp1: { linesPerS: number | null; garbled: number | null } | null;
   calibration: HubCalibration | null;
+  zone: HubZone | null;
 };
 
 type Obj = Record<string, unknown>;
@@ -75,6 +86,7 @@ function parseLink(v: unknown): HubLinkDebug | null {
     rssi: num(v.rssi),
     score: num(v.score),
     threshold: num(v.threshold),
+    baseline: num(v.baseline),
     calibrated: v.calibrated === true,
     motion: v.motion === true,
   };
@@ -136,5 +148,13 @@ export function parseHubDebug(raw: string): HubDebug | null {
     radar: parseRadar(d.radar),
     esp1: isObj(d.esp1) ? { linesPerS: num(d.esp1.lines_per_s), garbled: num(d.esp1.garbled) } : null,
     calibration: parseCalibration(d.calibration),
+    zone: isObj(d.zone)
+      ? {
+          state: str(d.zone.state),
+          entrySide: str(d.zone.entry_side),
+          entryLogic: d.zone.entry_logic === true,
+          exitOnCrossing: d.zone.exit_on_crossing === true,
+        }
+      : null,
   };
 }

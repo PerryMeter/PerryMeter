@@ -63,6 +63,8 @@ export type SignalRefValue = {
   isFresh: boolean;
   links: LinkState[] | null;
   nodes: NodeState[] | null;
+  /** Side of the ongoing entry ("left", "right", "base"), or null when nobody is inside. */
+  entrySide: string | null;
 };
 
 export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
@@ -96,6 +98,7 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
     isFresh: false,
     links: null,
     nodes: null,
+    entrySide: null,
   });
 
   // Source instances
@@ -146,6 +149,7 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
       isFresh: false,
       links: null,
       nodes: null,
+      entrySide: null,
     };
 
     const processRawMessage = (raw: string) => {
@@ -186,8 +190,10 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
         const wasInside = prevAlertRef.current === 'inside';
 
         if (isInside && !wasInside) {
-          let side: string | null = null;
+          // The hub's own entry decision wins; otherwise the last side active in the past 5 s
+          let side: string | null = detection.entrySide;
           if (
+            side === null &&
             lastActiveSideRef.current !== null &&
             detection.receivedAt - lastActiveSideRef.current.at <= 5000
           ) {
@@ -238,6 +244,9 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
         signalRef.current.links = detection.links;
         signalRef.current.nodes = detection.nodes;
         signalRef.current.isFresh = true;
+        const ongoing = eventsRef.current[0];
+        signalRef.current.entrySide =
+          isInside && ongoing !== undefined && ongoing.endAt === null ? ongoing.side : null;
       }
     };
 
@@ -352,6 +361,7 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
         signalRef.current.distanceM = null;
         signalRef.current.links = null;
         signalRef.current.nodes = null;
+        signalRef.current.entrySide = null;
       }
 
       const activeAlert = isFresh && latestRef.current ? latestRef.current.alert : null;

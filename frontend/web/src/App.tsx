@@ -190,6 +190,7 @@ export default function App() {
           rawMessage={rawMessage}
           onCalibrate={() => sendCommand({ type: 'calibrate' })}
           onCancelCalibration={() => sendCommand({ type: 'cancel_calibration' })}
+          onAdjustThreshold={(side, factor) => sendCommand({ type: 'adjust_threshold', side, factor })}
         />
       )}
 
@@ -220,16 +221,7 @@ export default function App() {
                 now={now}
                 className="p-3 shrink-0"
               />
-              <div className="grid grid-cols-2 gap-2 shrink-0">
-                <MetricCard
-                  type="strength"
-                  value={latest?.strength ?? null}
-                  motion={isFresh && (latest?.motion ?? false)}
-                  isFresh={isFresh}
-                  lastMessageAt={lastMessageAt}
-                  now={now}
-                  className="p-3"
-                />
+              <div className="shrink-0">
                 <MetricCard
                   type="confidence"
                   value={latest?.confidence ?? null}
@@ -274,15 +266,7 @@ export default function App() {
                   isFresh={isFresh}
                   now={now}
                 />
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <MetricCard
-                    type="strength"
-                    value={latest?.strength ?? null}
-                    motion={isFresh && (latest?.motion ?? false)}
-                    isFresh={isFresh}
-                    lastMessageAt={lastMessageAt}
-                    now={now}
-                  />
+                <div>
                   <MetricCard
                     type="confidence"
                     value={latest?.confidence ?? null}

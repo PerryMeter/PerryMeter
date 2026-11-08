@@ -49,10 +49,13 @@ export function ZoneCard({
         : 0;
       const notMovingSuffix =
         isFresh && latest?.motion === false ? ', not moving' : '';
+      const side = ongoingEvent?.side ?? null;
+      const fromSuffix =
+        side === 'base' ? ', from the radar side' : side ? `, from the ${side} side` : '';
       if (ongoingEvent) {
-        captionText = `Person in zone for ${durationSec.toFixed(1)} s${notMovingSuffix}`;
+        captionText = `Person in zone for ${durationSec.toFixed(1)} s${fromSuffix}${notMovingSuffix}`;
       } else {
-        captionText = `Person in zone${notMovingSuffix}`;
+        captionText = `Person in zone${fromSuffix}${notMovingSuffix}`;
       }
       cardStyles = 'border-motion/60 animate-alert-glow';
       cardInlineStyle = {

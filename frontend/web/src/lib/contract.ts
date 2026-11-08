@@ -23,6 +23,8 @@ export type Detection = {
   distanceM: number | null;
   links: LinkState[] | null;
   nodes: NodeState[] | null;
+  /** Side the person came in through ("left", "right", "base" = the radar's side), while inside. */
+  entrySide: string | null;
 };
 
 export type ParseResult = {
@@ -206,6 +208,13 @@ function parseItem(item: unknown, receivedAt: number): Detection | null {
     nodes = parsedNodes;
   }
 
+  // entry_side: optional short non-empty string, otherwise null (never makes a message invalid)
+  const rawEntry = record.entry_side;
+  const entrySide =
+    typeof rawEntry === 'string' && rawEntry.trim().length > 0 && rawEntry.length <= 16
+      ? rawEntry.trim()
+      : null;
+
   return {
     t,
     motion: rawMotion,
@@ -216,6 +225,7 @@ function parseItem(item: unknown, receivedAt: number): Detection | null {
     distanceM,
     links,
     nodes,
+    entrySide,
   };
 }
 

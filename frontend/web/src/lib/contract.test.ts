@@ -24,6 +24,7 @@ describe('parseDetections', () => {
         distanceM: null,
         links: null,
         nodes: null,
+        entrySide: null,
       },
     ]);
   });
@@ -71,6 +72,7 @@ describe('parseDetections', () => {
       distanceM: null,
       links: null,
       nodes: null,
+      entrySide: null,
     });
   });
 
@@ -175,6 +177,7 @@ describe('parseDetections', () => {
         distanceM: null,
         links: null,
         nodes: null,
+        entrySide: null,
       },
     ]);
   });
@@ -271,6 +274,7 @@ describe('parseDetections', () => {
       distanceM: null,
       links: null,
       nodes: null,
+      entrySide: null,
     });
   });
 
@@ -400,5 +404,16 @@ describe('parseDetections', () => {
     expect(result.invalid).toBe(0);
     expect(result.detections[0].links).toBeNull();
     expect(result.detections[0].nodes).toBeNull();
+  });
+
+  it('reads entry_side and ignores bad values', () => {
+    const base = { t: 1762450000.12, motion: true, strength: 0.5, confidence: 0.8, alert: 'inside' };
+    expect(parseDetections(JSON.stringify({ ...base, entry_side: 'left' }), receiveTime).detections[0].entrySide).toBe('left');
+    expect(parseDetections(JSON.stringify({ ...base, entry_side: 'base' }), receiveTime).detections[0].entrySide).toBe('base');
+    for (const bad of [null, 3, '', '   ', 'x'.repeat(17)]) {
+      const result = parseDetections(JSON.stringify({ ...base, entry_side: bad }), receiveTime);
+      expect(result.invalid).toBe(0);
+      expect(result.detections[0].entrySide).toBeNull();
+    }
   });
 });

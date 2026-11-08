@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { LinkStatus } from '../hooks/useDetectionStream';
-import type { HubCalibration, HubDebug, HubLinkDebug, HubRadarDebug } from '../lib/hubDebug';
+import type { HubCalibration, HubDebug, HubLinkDebug, HubRadarDebug, HubZone } from '../lib/hubDebug';
 import type { Mode } from '../lib/settings';
 
 type SensorPanelProps = {
@@ -13,6 +13,8 @@ type SensorPanelProps = {
   rawMessage: string | null;
   onCalibrate: () => boolean;
   onCancelCalibration: () => boolean;
+  /** Multiply one side's threshold by factor (for example 1.25 to make it harder to trigger). */
+  onAdjustThreshold: (side: string, factor: number) => boolean;
 };
 
 type Tone = 'accent' | 'warn' | 'motion' | 'faint';
@@ -79,7 +81,18 @@ function senderName(mac: string | null): string {
   return Number.isFinite(n) ? `ESP${n}` : 'sender';
 }
 
-function LinkCard({ link }: { link: HubLinkDebug }) {
+const STEP_BUTTON =
+  'px-2 py-0.5 rounded-[6px] border border-line-strong bg-surface text-text font-mono text-[11px] hover:bg-surface-2 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus:ring-1 focus:ring-accent';
+
+function LinkCard({
+  link,
+  canAdjust,
+  onAdjust,
+}: {
+  link: HubLinkDebug;
+  canAdjust: boolean;
+  onAdjust: (side: string, factor: number) => void;
+}) {
   const tone: Tone = !link.online ? 'faint' : link.motion ? 'warn' : 'accent';
   const max = link.threshold !== null && link.threshold > 0 ? link.threshold * 2 : 0.3;
   return (
@@ -106,6 +119,30 @@ function LinkCard({ link }: { link: HubLinkDebug }) {
         <div className="mt-1 flex justify-between font-mono text-[11px] tabular-nums">
           <span className={TONE_TEXT[tone]}>activity {fmt(link.score, 3)}</span>
           <span className="text-muted">threshold {fmt(link.threshold, 3)}</span>
+        </div>
+        <div className="mt-1.5 flex items-center justify-between gap-2">
+          <span className="font-mono text-[11px] text-faint tabular-nums">empty zone {fmt(link.baseline, 3)}</span>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] text-muted">Threshold</span>
+            <button
+              type="button"
+              onClick={() => onAdjust(link.id, 0.8)}
+              disabled={!canAdjust}
+              aria-label={`Lower the ${link.id} threshold (more sensitive)`}
+              className={STEP_BUTTON}
+            >
+              -
+            </button>
+            <button
+              type="button"
+              onClick={() => onAdjust(link.id, 1.25)}
+              disabled={!canAdjust}
+              aria-label={`Raise the ${link.id} threshold (less sensitive)`}
+              className={STEP_BUTTON}
+            >
+              +
+            </button>
+          </div>
         </div>
         {!link.calibrated && (
           <p className="mt-1 text-[11px] text-faint">Default threshold. Press Calibrate with the zone empty.</p>
@@ -180,6 +217,26 @@ function calibrationText(cal: HubCalibration | null): { label: string; tone: Ton
   }
 }
 
+function sideName(side: string | null): string {
+  if (side === 'base') return 'the radar side';
+  return side ? `the ${side} side` : 'an unknown side';
+}
+
+function zoneText(zone: HubZone): { text: string; tone: Tone } {
+  switch (zone.state) {
+    case 'inside':
+      return { text: `Inside, came in from ${sideName(zone.entrySide)}`, tone: 'motion' };
+    case 'seen_no_entry':
+      return { text: 'Radar sees someone, but nobody crossed a side yet: APPROACH, not ALERT', tone: 'warn' };
+    case 'left_zone':
+      return { text: 'Crossed back out. APPROACH until the radar stops seeing them', tone: 'warn' };
+    case 'clear':
+      return { text: 'Nobody in the radar range', tone: 'accent' };
+    default:
+      return { text: zone.state ?? '--', tone: 'faint' };
+  }
+}
+
 function prettyJson(raw: string | null): string {
   if (raw === null) return 'No message yet';
   try {
@@ -199,6 +256,7 @@ export function SensorPanel({
   rawMessage,
   onCalibrate,
   onCancelCalibration,
+  onAdjustThreshold,
 }: SensorPanelProps) {
   const [sendError, setSendError] = useState<string | null>(null);
 
@@ -214,6 +272,9 @@ export function SensorPanel({
   };
   const handleCancel = () => {
     setSendError(onCancelCalibration() ? null : 'Not connected to the hub');
+  };
+  const handleAdjust = (side: string, factor: number) => {
+    setSendError(onAdjustThreshold(side, factor) ? null : 'Not connected to the hub');
   };
 
   return (
@@ -282,11 +343,37 @@ export function SensorPanel({
               {sendError && <p className="mt-1.5 text-error font-mono text-[11px]">{sendError}</p>}
             </Section>
 
+            {debug.zone && (
+              <Section
+                title="Zone decision"
+                aside={
+                  <span className="font-mono text-[11px] text-faint">
+                    {debug.zone.entryLogic ? 'entry logic on' : 'radar only'}
+                  </span>
+                }
+              >
+                <p className={`font-mono text-[11px] ${TONE_TEXT[zoneText(debug.zone).tone]}`}>{zoneText(debug.zone).text}</p>
+                {debug.zone.entryLogic && (
+                  <p className="mt-1 text-[11px] text-faint leading-relaxed">
+                    ALERT needs an entry: a Wi-Fi side fires just before the radar sees them, or the radar first sees them far away (the radar side).
+                  </p>
+                )}
+              </Section>
+            )}
+
             {debug.links.length > 0 && (
               <Section title="Wi-Fi sides">
                 {debug.links.map((link) => (
-                  <LinkCard key={link.id} link={link} />
+                  <LinkCard
+                    key={link.id}
+                    link={link}
+                    canAdjust={mode === 'live' && isFresh && !running}
+                    onAdjust={handleAdjust}
+                  />
                 ))}
+                <p className="mt-2 text-[11px] text-faint leading-relaxed">
+                  Walk outside the zone near a side: its activity should stay under the marker. If it goes over, press + on that side. Cross the side: it should go over.
+                </p>
               </Section>
             )}
 

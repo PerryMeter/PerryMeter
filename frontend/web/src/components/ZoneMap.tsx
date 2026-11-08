@@ -123,20 +123,8 @@ function drawSide(
     return;
   }
 
-  // Disarmed: accent, no glow
-  if (!armed) {
-    ctx.setLineDash([]);
-    ctx.lineWidth = link.motion ? 3 : 2;
-    ctx.strokeStyle = theme.accent;
-    ctx.beginPath();
-    ctx.moveTo(p1.x, p1.y);
-    ctx.lineTo(p2.x, p2.y);
-    ctx.stroke();
-    ctx.restore();
-    return;
-  }
-
-  // Armed:
+  // Armed or disarmed, a side shows its own activity, so you can always see which side it is.
+  // (Disarming only turns off the alarm and the ALERT styling.)
   // 19.5: Active side colour:
   // A link with motion: true now means activity at that side, so draw it in warn
   // instead of motion: 3px warn, with the same glow (shadowBlur 12 to 24 scaled by
@@ -163,19 +151,6 @@ function drawSide(
     return;
   }
 
-  // Near (strength >= 0.15, motion false): 2.5px warn at 80%
-  if (link.strength >= 0.15) {
-    ctx.setLineDash([]);
-    ctx.lineWidth = 2.5;
-    ctx.strokeStyle = hexToRgba(theme.warn, 0.80);
-    ctx.beginPath();
-    ctx.moveTo(p1.x, p1.y);
-    ctx.lineTo(p2.x, p2.y);
-    ctx.stroke();
-    ctx.restore();
-    return;
-  }
-
   // Idle: 2px line-strong
   ctx.setLineDash([]);
   ctx.lineWidth = 2;
@@ -184,6 +159,18 @@ function drawSide(
   ctx.moveTo(p1.x, p1.y);
   ctx.lineTo(p2.x, p2.y);
   ctx.stroke();
+
+  // Rising activity below the threshold: the side warms up in warn as its strength climbs
+  // (the hub sends 0 at the empty-zone baseline and 0.5 at the threshold).
+  const warmth = Math.max(0, Math.min(1, (link.strength - 0.05) / 0.45));
+  if (warmth > 0) {
+    ctx.lineWidth = 2 + 0.75 * warmth;
+    ctx.strokeStyle = hexToRgba(theme.warn, 0.15 + 0.65 * warmth);
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.stroke();
+  }
   ctx.restore();
 }
 
@@ -242,6 +229,9 @@ export function ZoneMap({ signalRef, mode, armed, className }: ZoneMapProps) {
     let displayStrength = 0;
     let displayDistance = 3.0;
     let distanceAlpha = 0;
+    // Estimated position: radar distance from the hub, plus a left/right lean from the two Wi-Fi sides
+    let displayLean = 0;
+    let markerAlpha = 0;
     let rafId = 0;
 
     const render = (timestamp: number) => {
@@ -297,6 +287,24 @@ export function ZoneMap({ signalRef, mode, armed, className }: ZoneMapProps) {
       } else {
         distanceAlpha = Math.max(0, distanceAlpha - dt / 0.3);
       }
+
+      // Lean: which Wi-Fi side is more disturbed (-1 = left, +1 = right). It is an estimate: the
+      // radar gives only distance, and the sides only say how disturbed each link is.
+      const leftStrength = links?.find((l) => l.id === 'left')?.strength ?? 0;
+      const rightStrength = links?.find((l) => l.id === 'right')?.strength ?? 0;
+      const leanTarget = Math.max(
+        -1,
+        Math.min(1, (rightStrength - leftStrength) / Math.max(0.2, leftStrength + rightStrength))
+      );
+      const leanCertainty = Math.min(1, (leftStrength + rightStrength) / 0.6);
+      if (dt > 0) {
+        displayLean += (leanTarget - displayLean) * (1 - Math.exp(-dt / 0.4));
+      }
+      const showMarker = isFresh && distanceM !== null && (alert === 'inside' || alert === 'approach');
+      markerAlpha = showMarker
+        ? Math.min(1, markerAlpha + dt / 0.3)
+        : Math.max(0, markerAlpha - dt / 0.3);
+      const entrySide = currentSignal?.entrySide ?? null;
 
       // Geometry:
       // S = min(0.80 * width, 0.80 * height / 0.866)
@@ -547,20 +555,90 @@ export function ZoneMap({ signalRef, mode, armed, className }: ZoneMapProps) {
           isFresh
         );
       } else {
+        // No Wi-Fi link on the bottom side: with a radar it is the radar's side (the radar faces it
+        // and sees people come in through it); without one it is unmonitored (expansion kit).
+        const radarWatches = Boolean(nodes?.some((n) => n.id === 'radar' && n.online));
         ctx.save();
         ctx.beginPath();
         ctx.moveTo(left.x, left.y);
         ctx.lineTo(right.x, right.y);
         ctx.setLineDash([4, 4]);
         ctx.lineWidth = 1.5;
-        ctx.strokeStyle = theme.faint;
+        ctx.strokeStyle = radarWatches ? theme.lineStrong : theme.faint;
         ctx.stroke();
 
         ctx.font = "10px 'IBM Plex Mono', monospace";
-        ctx.fillStyle = theme.faint;
+        ctx.fillStyle = radarWatches ? theme.muted : theme.faint;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
-        ctx.fillText('EXPANSION', cx, left.y + 6);
+        ctx.fillText(radarWatches ? 'RADAR SIDE' : 'EXPANSION', cx, left.y + 6);
+        ctx.restore();
+      }
+
+      // 5b. Where the person came in and where they probably are (estimate)
+      if (markerAlpha > 0.01) {
+        const color = alert === 'inside' ? theme.motion : theme.warn;
+        const angle = Math.PI / 2 - displayLean * (Math.PI / 6) * 0.85;
+        const r = displayDistance * pxPerMetre;
+        const px = hub.x + Math.cos(angle) * r;
+        const py = hub.y + Math.sin(angle) * r;
+
+        ctx.save();
+        ctx.globalAlpha = baseAlpha * markerAlpha;
+
+        // Entry arrow on the side they came in through, and a dashed line to where they are
+        let entryMid: Point | null = null;
+        if (alert === 'inside' && entrySide !== null) {
+          if (entrySide === 'left') entryMid = { x: (hub.x + left.x) / 2, y: (hub.y + left.y) / 2 };
+          else if (entrySide === 'right') entryMid = { x: (hub.x + right.x) / 2, y: (hub.y + right.y) / 2 };
+          else if (entrySide === 'base') entryMid = { x: cx, y: left.y };
+        }
+        if (entryMid !== null) {
+          const nx0 = centroidX - entryMid.x;
+          const ny0 = centroidY - entryMid.y;
+          const len = Math.max(1, Math.hypot(nx0, ny0));
+          const nx = nx0 / len;
+          const ny = ny0 / len;
+          const size = Math.max(7, S * 0.025);
+          ctx.beginPath();
+          ctx.moveTo(entryMid.x - ny * size, entryMid.y + nx * size);
+          ctx.lineTo(entryMid.x + nx * size * 1.2, entryMid.y + ny * size * 1.2);
+          ctx.lineTo(entryMid.x + ny * size, entryMid.y - nx * size);
+          ctx.lineWidth = 2.5;
+          ctx.strokeStyle = theme.warn;
+          ctx.setLineDash([]);
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.moveTo(entryMid.x + nx * size * 1.2, entryMid.y + ny * size * 1.2);
+          ctx.lineTo(px, py);
+          ctx.setLineDash([3, 5]);
+          ctx.lineWidth = 1.25;
+          ctx.strokeStyle = hexToRgba(theme.warn, 0.7);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+
+        // Soft blob: wider when the left/right lean is uncertain
+        const spread = S * (0.035 + 0.07 * (1 - leanCertainty));
+        const glow = ctx.createRadialGradient(px, py, 0, px, py, spread);
+        glow.addColorStop(0, hexToRgba(color, 0.55));
+        glow.addColorStop(1, hexToRgba(color, 0));
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(px, py, spread, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(px, py, Math.max(3.5, S * 0.012), 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+
+        ctx.font = "9px 'IBM Plex Mono', monospace";
+        ctx.fillStyle = hexToRgba(color, 0.85);
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('EST', px + Math.max(6, S * 0.02), py);
         ctx.restore();
       }
 
@@ -652,53 +730,28 @@ export function ZoneMap({ signalRef, mode, armed, className }: ZoneMapProps) {
 
       ctx.restore();
 
-      // 7. Centre readout at the triangle's centroid, on a dark disc as in section 10:
-      // inside with a distance, 2.3 m with the label FROM HUB;
-      // otherwise the strength percentage with the label STRENGTH;
-      // not fresh, -- and NO DATA.
-      const discRadius = Math.max(26, S * 0.12);
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(centroidX, centroidY, discRadius, 0, Math.PI * 2);
-      ctx.fillStyle = theme.bg;
-      ctx.fill();
-
-      let valStr = '';
-      let lblStr = '';
-      let valColor: string = theme.text;
-      let lblColor: string = theme.muted;
-
-      if (!isFresh) {
-        valStr = '--';
-        lblStr = 'NO DATA';
-        valColor = theme.faint;
-        lblColor = theme.muted;
-      } else if (alert === 'inside' && distanceM !== null) {
+      // 7. Readout in the top-left corner (out of the way of the position marker):
+      // the radar distance while it sees someone, otherwise NO TARGET; not fresh, NO DATA.
+      let valStr = '--';
+      let lblStr = 'NO DATA';
+      let valColor: string = theme.faint;
+      if (isFresh && distanceM !== null && alert !== 'clear') {
         valStr = `${distanceM.toFixed(1)} m`;
         lblStr = 'FROM HUB';
-        valColor = theme.text;
-        lblColor = theme.muted;
-      } else {
-        valStr = `${Math.round(displayStrength * 100)}%`;
-        lblStr = 'STRENGTH';
-        valColor = theme.text;
-        lblColor = theme.muted;
+        valColor = alert === 'inside' ? theme.motion : theme.warn;
+      } else if (isFresh) {
+        lblStr = 'NO TARGET';
       }
-
-      const valFontSize = Math.max(14, Math.round(discRadius * 0.44));
-      const lblFontSize = Math.max(9, Math.round(discRadius * 0.22));
-
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-
+      const valFontSize = Math.max(14, Math.round(S * 0.055));
+      ctx.save();
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
       ctx.font = `500 ${valFontSize}px 'IBM Plex Mono', monospace`;
       ctx.fillStyle = valColor;
-      ctx.fillText(valStr, centroidX, centroidY - discRadius * 0.18);
-
-      ctx.font = `400 ${lblFontSize}px 'IBM Plex Mono', monospace`;
-      ctx.fillStyle = lblColor;
-      ctx.fillText(lblStr, centroidX, centroidY + discRadius * 0.35);
-
+      ctx.fillText(valStr, 12, 12);
+      ctx.font = "400 10px 'IBM Plex Mono', monospace";
+      ctx.fillStyle = theme.muted;
+      ctx.fillText(lblStr, 12, 16 + valFontSize);
       ctx.restore();
 
       // Restore outer baseAlpha save
