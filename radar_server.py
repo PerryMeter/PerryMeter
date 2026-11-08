@@ -175,6 +175,8 @@ def build_message(frame, avg_m, avg_s, hyst, now):
         "distance_m": round(dist_cm / 100, 2) if dist_cm is not None else None,
         "moving_energy": round(avg_m, 1),      # averaged over SMOOTH_S
         "still_energy": round(avg_s, 1),
+        "moving_threshold": MOVING_THRESHOLD,  # thresholds in use (calibrated or fixed)
+        "still_threshold": STILL_THRESHOLD,
         "source": "ld2410c",
     }
 

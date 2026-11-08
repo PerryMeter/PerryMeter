@@ -1,9 +1,10 @@
 """Live graph of the HLK-LD2410C radar with a moving / still / nothing prediction.
 
 Usage:
-    python radar_plot.py COM10     (use your port)
+    python radar_plot.py COM10                       radar plugged into this computer
+    python radar_plot.py ws://10.208.150.184:8766    radar on the Pi (radar_server.py running there)
 
-Needs:  pip install matplotlib     (pyserial is already installed)
+Needs:  pip install matplotlib websockets     (pyserial is already installed)
         radar_settings.py in the same folder (thresholds live there)
 Close the graph window to stop.
 
@@ -13,6 +14,7 @@ Bottom panel: movement and stillness energy, averaged, with the two constant
               thresholds from radar_settings.py as dashed lines.
 """
 import collections
+import json
 import math
 import struct
 import sys
@@ -89,6 +91,52 @@ def inches(cm):
 history = collections.deque()
 lock = threading.Lock()
 problems = []
+thresholds = {"moving": MOVING_THRESHOLD, "still": STILL_THRESHOLD}  # updated by a remote server
+
+
+def remember(now, row):
+    with lock:
+        history.append(row)
+        while history and now - history[0][0] > WINDOW_S:
+            history.popleft()
+
+
+def print_line(pred, dist, avg_m, avg_s):
+    where = f"{inches(dist):4} in" if dist is not None else "   --  "
+    print(
+        f"{LABELS[pred]:8} distance {where}   "
+        f"movement {avg_m:5.1f} (>= {thresholds['moving']})   "
+        f"stillness {avg_s:5.1f} (>= {thresholds['still']})"
+    )
+
+
+def ws_reader(url):
+    """Read the dashboard messages from radar_server.py (e.g. on the Pi); reconnect if dropped."""
+    from websockets.sync.client import connect
+
+    last_print = 0.0
+    while True:
+        try:
+            with connect(url, open_timeout=5) as ws:
+                print(f"Connected to {url}")
+                problems.clear()
+                for raw in ws:
+                    m = json.loads(raw)
+                    now = time.time()  # this computer's clock, so the x axis is right here
+                    thresholds["moving"] = m.get("moving_threshold", thresholds["moving"])
+                    thresholds["still"] = m.get("still_threshold", thresholds["still"])
+                    pred = m.get("prediction", "nothing")
+                    dist = m["distance_m"] * 100 if m.get("distance_m") is not None else None
+                    avg_m, avg_s = m.get("moving_energy", 0), m.get("still_energy", 0)
+                    remember(now, (now, None, None, None, None, avg_m, avg_s, pred, dist))
+                    if now - last_print >= PRINT_EVERY:
+                        last_print = now
+                        print_line(pred, dist, avg_m, avg_s)
+        except Exception as e:
+            if not problems:
+                problems.append(e)
+            print(f"Stream problem: {e}  (retrying in 2 s)")
+            time.sleep(2)
 
 
 def reader(port):
@@ -106,19 +154,10 @@ def reader(port):
                 avg_s = sum(r[2] for r in recent) / len(recent)
                 pred, dist = classify(avg_m, avg_s, m_cm, s_cm)
 
-                with lock:
-                    history.append((now, m_cm, m_en, s_cm, s_en, avg_m, avg_s, pred, dist))
-                    while history and now - history[0][0] > WINDOW_S:
-                        history.popleft()
-
+                remember(now, (now, m_cm, m_en, s_cm, s_en, avg_m, avg_s, pred, dist))
                 if now - last_print >= PRINT_EVERY:
                     last_print = now
-                    where = f"{inches(dist):4} in" if dist is not None else "   --  "
-                    print(
-                        f"{LABELS[pred]:8} distance {where}   "
-                        f"movement {avg_m:5.1f} (>= {MOVING_THRESHOLD})   "
-                        f"stillness {avg_s:5.1f} (>= {STILL_THRESHOLD})"
-                    )
+                    print_line(pred, dist, avg_m, avg_s)
     except Exception as e:  # shown in the graph title too
         problems.append(e)
         print(f"\nCould not use the port: {e}")
@@ -138,12 +177,20 @@ def style(ax, ylabel):
 
 def main():
     if len(sys.argv) < 2:
-        print("Give the ESP32's port, for example:  python radar_plot.py COM10")
+        print("Give the ESP32's port or the Pi's stream, for example:")
+        print("  python radar_plot.py COM10")
+        print("  python radar_plot.py ws://10.208.150.184:8766")
         return
-    print(f"Rule: moving if movement >= {MOVING_THRESHOLD}, else still if stillness >= "
-          f"{STILL_THRESHOLD}, else nothing. Only {MIN_DISTANCE_CM}-{MAX_DISTANCE_CM} cm "
-          f"counts. Energy averaged over {SMOOTH_S:g} s.\nThresholds from: {THRESHOLD_SOURCE}\n")
-    threading.Thread(target=reader, args=(sys.argv[1],), daemon=True).start()
+    source = sys.argv[1]
+    if source.startswith(("ws://", "wss://")):
+        print(f"Reading radar_server.py's stream at {source}. The prediction and thresholds come "
+              "from that computer's settings.\n")
+        threading.Thread(target=ws_reader, args=(source,), daemon=True).start()
+    else:
+        print(f"Rule: moving if movement >= {MOVING_THRESHOLD}, else still if stillness >= "
+              f"{STILL_THRESHOLD}, else nothing. Only {MIN_DISTANCE_CM}-{MAX_DISTANCE_CM} cm "
+              f"counts. Energy averaged over {SMOOTH_S:g} s.\nThresholds from: {THRESHOLD_SOURCE}\n")
+        threading.Thread(target=reader, args=(source,), daemon=True).start()
 
     fig, (ax_d, ax_e) = plt.subplots(2, 1, sharex=True, figsize=(9, 6))
     fig.patch.set_facecolor(SURFACE)
@@ -165,21 +212,21 @@ def main():
     ax_e.set_xlabel("Seconds ago", color=QUIET)
     (e_move,) = ax_e.plot([], [], color=MOVING_C, linewidth=2, label="Movement energy")
     (e_still,) = ax_e.plot([], [], color=STILL_C, linewidth=2, label="Stillness energy")
-    ax_e.axhline(MOVING_THRESHOLD, color=MOVING_C, linewidth=1.25, linestyle="--",
-                 label=f"Moving threshold ({MOVING_THRESHOLD})")
-    ax_e.axhline(STILL_THRESHOLD, color=STILL_C, linewidth=1.25, linestyle="--",
-                 label=f"Still threshold ({STILL_THRESHOLD})")
+    t_move = ax_e.axhline(MOVING_THRESHOLD, color=MOVING_C, linewidth=1.25, linestyle="--",
+                          label="Moving threshold")
+    t_still = ax_e.axhline(STILL_THRESHOLD, color=STILL_C, linewidth=1.25, linestyle="--",
+                           label="Still threshold")
     ax_e.legend(loc="upper left", frameon=False, labelcolor=INK, ncol=4, fontsize=8.5)
 
     title = fig.suptitle("Waiting for radar data...", color=INK, fontsize=12)
-    lines = (d_move, d_still, e_move, e_still, title)
+    lines = (d_move, d_still, e_move, e_still, t_move, t_still, title)
     nan = math.nan
 
     def update(_):
         with lock:
             data = list(history)
         if problems:
-            title.set_text(f"Port problem: {problems[0]}")
+            title.set_text(f"Connection problem: {problems[0]}  (retrying)")
             return lines
         if not data:
             return lines
@@ -190,12 +237,14 @@ def main():
         d_still.set_data(xs, [r[8] / CM_PER_IN if r[7] == "still" else nan for r in data])
         e_move.set_data(xs, [r[5] for r in data])
         e_still.set_data(xs, [r[6] for r in data])
+        t_move.set_ydata([thresholds["moving"]] * 2)
+        t_still.set_ydata([thresholds["still"]] * 2)
 
         _, _, _, _, _, avg_m, avg_s, pred, dist = data[-1]
         where = f"{inches(dist)} in away" if dist is not None else "no one in range"
         title.set_text(
             f"Prediction: {LABELS[pred]}  |  {where}  |  "
-            f"movement {avg_m:.0f} (>= {MOVING_THRESHOLD})  |  stillness {avg_s:.0f} (>= {STILL_THRESHOLD})"
+            f"movement {avg_m:.0f} (>= {thresholds['moving']})  |  stillness {avg_s:.0f} (>= {thresholds['still']})"
         )
         return lines
 
