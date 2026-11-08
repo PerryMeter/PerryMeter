@@ -66,16 +66,16 @@ export function ZoneCard({
       // APPROACH state
       valueText = 'APPROACH';
       valueColor = 'text-warn';
-      const activeLinks = latest?.links;
-      if (activeLinks && activeLinks.length > 0) {
-        const movingLinks = activeLinks.filter((l) => l.motion);
-        const candidates = movingLinks.length > 0 ? movingLinks : activeLinks;
-        const bestLink = [...candidates].sort((a, b) => b.strength - a.strength)[0];
+      // Name a side only when that side is actually active. Otherwise the radar is what saw them
+      // (in range, but no entry), so give its distance from the hub.
+      const movingLinks = (latest?.links ?? []).filter((l) => l.motion);
+      if (movingLinks.length > 0) {
+        const bestLink = [...movingLinks].sort((a, b) => b.strength - a.strength)[0];
         captionText = `Activity at the ${bestLink.id} side`;
       } else if (distanceM !== null) {
-        captionText = `Someone approaching, ${distanceM.toFixed(1)} m from the fence`;
+        captionText = `Someone near the zone, ${distanceM.toFixed(1)} m from the hub`;
       } else {
-        captionText = 'Someone approaching';
+        captionText = 'Someone near the zone';
       }
       cardStyles = 'bg-surface border-warn/50';
     } else {

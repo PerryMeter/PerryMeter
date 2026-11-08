@@ -14,6 +14,9 @@ export type HubLinkDebug = {
   threshold: number | null;
   /** Typical empty-zone score from the last calibration. */
   baseline: number | null;
+  /** Experimental "line blocked" value and threshold (null unless the hub runs with --line-blocked). */
+  block: number | null;
+  blockThreshold: number | null;
   calibrated: boolean;
   motion: boolean;
 };
@@ -87,6 +90,8 @@ function parseLink(v: unknown): HubLinkDebug | null {
     score: num(v.score),
     threshold: num(v.threshold),
     baseline: num(v.baseline),
+    block: num(v.block),
+    blockThreshold: num(v.block_threshold),
     calibrated: v.calibrated === true,
     motion: v.motion === true,
   };

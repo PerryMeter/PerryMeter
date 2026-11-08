@@ -120,6 +120,15 @@ function LinkCard({
           <span className={TONE_TEXT[tone]}>activity {fmt(link.score, 3)}</span>
           <span className="text-muted">threshold {fmt(link.threshold, 3)}</span>
         </div>
+        {link.block !== null && link.blockThreshold !== null && (
+          <div className="mt-2">
+            <Bar value={link.block} max={link.blockThreshold * 2} marker={link.blockThreshold} tone={tone} label={`${link.id} line blocked`} />
+            <div className="mt-1 flex justify-between font-mono text-[11px] tabular-nums">
+              <span className={TONE_TEXT[tone]}>line blocked {fmt(link.block, 3)}</span>
+              <span className="text-muted">threshold {fmt(link.blockThreshold, 3)}</span>
+            </div>
+          </div>
+        )}
         <div className="mt-1.5 flex items-center justify-between gap-2">
           <span className="font-mono text-[11px] text-faint tabular-nums">empty zone {fmt(link.baseline, 3)}</span>
           <div className="flex items-center gap-1.5">

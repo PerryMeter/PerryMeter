@@ -300,7 +300,8 @@ export function ZoneMap({ signalRef, mode, armed, className }: ZoneMapProps) {
       if (dt > 0) {
         displayLean += (leanTarget - displayLean) * (1 - Math.exp(-dt / 0.4));
       }
-      const showMarker = isFresh && distanceM !== null && (alert === 'inside' || alert === 'approach');
+      // Only for someone inside the zone: nobody is marked outside it
+      const showMarker = isFresh && distanceM !== null && alert === 'inside';
       markerAlpha = showMarker
         ? Math.min(1, markerAlpha + dt / 0.3)
         : Math.max(0, markerAlpha - dt / 0.3);
@@ -580,8 +581,31 @@ export function ZoneMap({ signalRef, mode, armed, className }: ZoneMapProps) {
         const color = alert === 'inside' ? theme.motion : theme.warn;
         const angle = Math.PI / 2 - displayLean * (Math.PI / 6) * 0.85;
         const r = displayDistance * pxPerMetre;
-        const px = hub.x + Math.cos(angle) * r;
-        const py = hub.y + Math.sin(angle) * r;
+        let px = hub.x + Math.cos(angle) * r;
+        let py = hub.y + Math.sin(angle) * r;
+        // They are inside, so keep the marker inside the triangle: the radar measures a circle
+        // around the hub, which reaches a little past the bottom side.
+        const isInsideTriangle = (x: number, y: number) => {
+          const cross = (a: Point, b: Point) => (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x);
+          const d1 = cross(hub, left);
+          const d2 = cross(left, right);
+          const d3 = cross(right, hub);
+          const hasNeg = d1 < 0 || d2 < 0 || d3 < 0;
+          const hasPos = d1 > 0 || d2 > 0 || d3 > 0;
+          return !(hasNeg && hasPos);
+        };
+        if (!isInsideTriangle(px, py)) {
+          let lo = 0;
+          let hi = 1;
+          for (let k = 0; k < 12; k++) {
+            const mid = (lo + hi) / 2;
+            if (isInsideTriangle(centroidX + (px - centroidX) * mid, centroidY + (py - centroidY) * mid)) lo = mid;
+            else hi = mid;
+          }
+          const t = lo * 0.92;
+          px = centroidX + (px - centroidX) * t;
+          py = centroidY + (py - centroidY) * t;
+        }
 
         ctx.save();
         ctx.globalAlpha = baseAlpha * markerAlpha;
