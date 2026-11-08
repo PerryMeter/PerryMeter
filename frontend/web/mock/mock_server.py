@@ -15,9 +15,17 @@ def compute_confidence(strength: float) -> float:
     return max(0.0, min(1.0, base + noise))
 
 
-async def broadcast_loop(rate: float, scenario: str, legacy: bool, offline: str | None = None):
+async def broadcast_loop(
+    rate: float,
+    scenario: str,
+    legacy: bool,
+    offline: str | None = None,
+    sides: str = "left,right",
+):
     loop = asyncio.get_running_loop()
     dt = 1.0 / rate
+
+    installed_sides = [s.strip() for s in sides.split(",") if s.strip()]
 
     # Signal state
     strength = 0.06
@@ -30,6 +38,10 @@ async def broadcast_loop(rate: float, scenario: str, legacy: bool, offline: str 
     triangle_side = "left"
     tri_phase_elapsed = 0.0
     tri_phase_duration = 0.0
+    tri_peak_strength = 0.55
+    fade_start_str = 0.05
+    radar_motion = False
+    radar_level = 0.0
     time_until_tri_visit = random.uniform(10.0, 20.0)
     left_strength = 0.05
     right_strength = 0.05
@@ -180,112 +192,150 @@ async def broadcast_loop(rate: float, scenario: str, legacy: bool, offline: str 
                 distance_m = None
                 left_motion = False
                 right_motion = False
+                radar_motion = False
+                radar_level = 0.0
                 left_strength = left_idle
                 right_strength = right_idle
 
                 time_until_tri_visit -= dt
                 if time_until_tri_visit <= 0.0:
-                    # Only use sides whose node is online, so every crossing is visible in `links`.
-                    triangle_side = random.choice([s for s in ("left", "right") if s != offline] or ["left"])
-                    triangle_state = "near"
-                    tri_phase_elapsed = 0.0
-                    tri_phase_duration = random.uniform(1.5, 2.5)
-                    alert = "approach"
-                    print(f"triangle: approach {triangle_side}", flush=True)
+                    available_sides = [s for s in installed_sides if s != offline]
+                    if available_sides:
+                        triangle_side = random.choice(available_sides)
+                        triangle_state = "activity"
+                        tri_phase_elapsed = 0.0
+                        tri_phase_duration = random.uniform(1.5, 2.5)
+                        tri_peak_strength = random.uniform(0.45, 0.60)
+                        alert = "approach"
+                        print(f"triangle: approach ({triangle_side} side active)", flush=True)
+                    else:
+                        time_until_tri_visit = 5.0
 
-            elif triangle_state == "near":
+            elif triangle_state == "activity":
                 tri_phase_elapsed += dt
                 alert = "approach"
                 distance_m = None
-                left_motion = False
-                right_motion = False
+                radar_motion = False
+                radar_level = 0.0
 
                 p = min(1.0, tri_phase_elapsed / tri_phase_duration)
-                near_str = min(0.28, 0.05 + 0.20 * p + random.uniform(-0.015, 0.015))
-                if triangle_side == "left":
-                    left_strength = near_str
-                    right_strength = right_idle
-                else:
-                    right_strength = near_str
-                    left_strength = left_idle
+                wobble = 0.04 * math.sin(2.0 * math.pi * 1.7 * tri_phase_elapsed) + random.uniform(-0.015, 0.015)
+                str_val = max(0.02, min(0.95, 0.05 + (tri_peak_strength - 0.05) * math.sin(math.pi * 0.5 * p) + wobble))
 
-                if tri_phase_elapsed >= tri_phase_duration:
-                    triangle_state = "crossing"
-                    tri_phase_elapsed = 0.0
-                    tri_phase_duration = random.uniform(1.0, 1.5)
-                    alert = "inside"
-                    if triangle_side == "left":
-                        left_strength = 0.65
+                if triangle_side == "left":
+                    left_strength = str_val
+                    if left_strength > 0.35:
                         left_motion = True
-                    else:
-                        right_strength = 0.65
-                        right_motion = True
-                    print(f"triangle: inside (crossed {triangle_side})", flush=True)
-
-            elif triangle_state == "crossing":
-                tri_phase_elapsed += dt
-                alert = "inside"
-                distance_m = None
-
-                p = min(1.0, tri_phase_elapsed / tri_phase_duration)
-                wobble = 0.06 * math.sin(2 * math.pi * 1.7 * tri_phase_elapsed) + random.uniform(-0.02, 0.02)
-                cross_str = max(0.36, min(0.92, 0.55 + 0.25 * math.sin(math.pi * p) + wobble))
-
-                if triangle_side == "left":
-                    left_strength = cross_str
-                    left_motion = True if left_strength > 0.35 else (False if left_strength < 0.25 else left_motion)
+                    elif left_strength < 0.25:
+                        left_motion = False
                     right_strength = right_idle
                     right_motion = False
                 else:
-                    right_strength = cross_str
-                    right_motion = True if right_strength > 0.35 else (False if right_strength < 0.25 else right_motion)
+                    right_strength = str_val
+                    if right_strength > 0.35:
+                        right_motion = True
+                    elif right_strength < 0.25:
+                        right_motion = False
                     left_strength = left_idle
                     left_motion = False
 
                 if tri_phase_elapsed >= tri_phase_duration:
-                    triangle_state = "inside"
+                    triangle_state = "inside_moving"
                     tri_phase_elapsed = 0.0
-                    tri_phase_duration = random.uniform(2.0, 5.0)
+                    tri_phase_duration = random.uniform(2.0, 3.0)
                     radar_dist = random.uniform(1.0, 3.0)
+                    distance_m = round(radar_dist, 1)
                     alert = "inside"
-                    left_motion = False
-                    right_motion = False
-                    print("triangle: inside (radar)", flush=True)
+                    fade_start_str = left_strength if triangle_side == "left" else right_strength
+                    print(f"triangle: inside (moving, {distance_m:.1f} m)", flush=True)
 
-            elif triangle_state == "inside":
+            elif triangle_state == "inside_moving":
                 tri_phase_elapsed += dt
                 alert = "inside"
+                radar_dist = max(1.0, min(3.0, radar_dist + random.uniform(-0.05, 0.05)))
+                distance_m = round(radar_dist, 1)
+                radar_motion = True
+                radar_level = max(0.40, min(0.60, 0.50 + 0.08 * math.sin(2.0 * math.pi * 1.5 * tri_phase_elapsed) + random.uniform(-0.02, 0.02)))
+
+                fade_p = min(1.0, tri_phase_elapsed / 1.0)
+                decay_str = max(0.05, fade_start_str * (1.0 - fade_p) + 0.05 * fade_p)
+
+                if triangle_side == "left":
+                    left_strength = decay_str
+                    if left_strength > 0.35:
+                        left_motion = True
+                    elif left_strength < 0.25:
+                        left_motion = False
+                    right_strength = right_idle
+                    right_motion = False
+                else:
+                    right_strength = decay_str
+                    if right_strength > 0.35:
+                        right_motion = True
+                    elif right_strength < 0.25:
+                        right_motion = False
+                    left_strength = left_idle
+                    left_motion = False
+
+                if tri_phase_elapsed >= tri_phase_duration:
+                    triangle_state = "inside_still"
+                    tri_phase_elapsed = 0.0
+                    tri_phase_duration = random.uniform(3.0, 6.0)
+                    radar_motion = False
+                    radar_level = 0.05
+                    left_motion = False
+                    right_motion = False
+                    left_strength = left_idle
+                    right_strength = right_idle
+                    alert = "inside"
+                    print("triangle: inside (still)", flush=True)
+
+            elif triangle_state == "inside_still":
+                tri_phase_elapsed += dt
+                alert = "inside"
+                radar_motion = False
+                radar_level = max(0.02, min(0.08, 0.05 + random.uniform(-0.01, 0.01)))
                 left_motion = False
                 right_motion = False
                 left_strength = left_idle
                 right_strength = right_idle
 
-                if radar_dist is not None:
-                    radar_dist = max(1.0, min(3.0, radar_dist + random.uniform(-0.04, 0.04)))
-                    distance_m = radar_dist
-
                 if tri_phase_elapsed >= tri_phase_duration:
-                    triangle_state = "exit_crossing"
+                    triangle_state = "leaving"
                     tri_phase_elapsed = 0.0
-                    tri_phase_duration = 1.0
-                    alert = "inside"
+                    tri_phase_duration = 1.5
+                    tri_peak_strength = random.uniform(0.45, 0.60)
+                    alert = "approach"
+                    distance_m = None
+                    radar_motion = False
+                    radar_level = 0.0
+                    print(f"triangle: leaving ({triangle_side} side active)", flush=True)
 
-            elif triangle_state == "exit_crossing":
+            elif triangle_state == "leaving":
                 tri_phase_elapsed += dt
-                alert = "inside"
+                alert = "approach"
+                distance_m = None
+                radar_motion = False
+                radar_level = 0.0
 
                 p = min(1.0, tri_phase_elapsed / tri_phase_duration)
-                wobble = 0.06 * math.sin(2 * math.pi * 1.7 * tri_phase_elapsed) + random.uniform(-0.02, 0.02)
-                cross_str = max(0.36, min(0.90, 0.50 + 0.28 * math.sin(math.pi * p) + wobble))
+                wobble = 0.04 * math.sin(2.0 * math.pi * 1.7 * tri_phase_elapsed) + random.uniform(-0.015, 0.015)
+                str_val = max(0.02, min(0.95, 0.05 + (tri_peak_strength - 0.05) * math.sin(math.pi * 0.5 * p) + wobble))
 
                 if triangle_side == "left":
-                    left_strength = cross_str
-                    left_motion = True if left_strength > 0.35 else (False if left_strength < 0.25 else left_motion)
+                    left_strength = str_val
+                    if left_strength > 0.35:
+                        left_motion = True
+                    elif left_strength < 0.25:
+                        left_motion = False
                     right_strength = right_idle
                     right_motion = False
                 else:
-                    right_strength = cross_str
-                    right_motion = True if right_strength > 0.35 else (False if right_strength < 0.25 else right_motion)
+                    right_strength = str_val
+                    if right_strength > 0.35:
+                        right_motion = True
+                    elif right_strength < 0.25:
+                        right_motion = False
                     left_strength = left_idle
                     left_motion = False
 
@@ -293,17 +343,18 @@ async def broadcast_loop(rate: float, scenario: str, legacy: bool, offline: str 
                     triangle_state = "clear"
                     tri_phase_elapsed = 0.0
                     time_until_tri_visit = random.uniform(10.0, 20.0)
-                    distance_m = None
                     alert = "clear"
+                    distance_m = None
                     left_motion = False
                     right_motion = False
-                    # The person has left: drop the crossed side back to idle in this same message.
+                    radar_motion = False
+                    radar_level = 0.0
                     left_strength = left_idle
                     right_strength = right_idle
                     print("triangle: clear", flush=True)
 
-            motion = left_motion or right_motion
-            strength = max(left_strength, right_strength)
+            motion = left_motion or right_motion or radar_motion
+            strength = max(left_strength, right_strength, radar_level)
 
         elif scenario in ("mixed", "chaos"):
             if not in_episode:
@@ -440,28 +491,26 @@ async def broadcast_loop(rate: float, scenario: str, legacy: bool, offline: str 
             }
         elif scenario == "triangle":
             links = []
-            if offline != "left":
+            if "left" in installed_sides and offline != "left":
                 links.append({
                     "id": "left",
                     "motion": left_motion,
                     "strength": round(left_strength, 3),
-                    "rssi": round(-58 + random.uniform(-1, 1)),
-                    "pps": random.randint(27, 29),
+                    "rssi": round(-55 + random.uniform(-1, 1)),
+                    "pps": random.randint(68, 72),
                 })
-            if offline != "right":
+            if "right" in installed_sides and offline != "right":
                 links.append({
                     "id": "right",
                     "motion": right_motion,
                     "strength": round(right_strength, 3),
-                    "rssi": round(-61 + random.uniform(-1, 1)),
-                    "pps": random.randint(27, 29),
+                    "rssi": round(-58 + random.uniform(-1, 1)),
+                    "pps": random.randint(68, 72),
                 })
-            nodes = [
-                {"id": "hub", "online": offline != "hub"},
-                {"id": "left", "online": offline != "left"},
-                {"id": "right", "online": offline != "right"},
-                {"id": "radar", "online": offline != "radar"},
-            ]
+            nodes = [{"id": "hub", "online": offline != "hub"}]
+            for s in installed_sides:
+                nodes.append({"id": s, "online": offline != s})
+            nodes.append({"id": "radar", "online": offline != "radar"})
             payload = {
                 "t": time.time(),
                 "motion": motion,
@@ -518,6 +567,11 @@ async def main():
         default=None,
         help="Node id to report offline, e.g. right",
     )
+    parser.add_argument(
+        "--sides",
+        default="left,right",
+        help="Comma-separated list of installed sides, default left,right",
+    )
     args = parser.parse_args()
 
     async with serve(handler, args.host, args.port):
@@ -525,7 +579,7 @@ async def main():
             f"Perrymeter mock server listening on ws://{args.host}:{args.port} (scenario: {args.scenario}, rate: {args.rate} Hz, legacy: {args.legacy})",
             flush=True,
         )
-        await broadcast_loop(args.rate, args.scenario, args.legacy, args.offline)
+        await broadcast_loop(args.rate, args.scenario, args.legacy, args.offline, args.sides)
 
 
 if __name__ == "__main__":

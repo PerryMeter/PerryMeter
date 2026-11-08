@@ -96,6 +96,8 @@ python mock/mock_server.py
 ### Mock server options
 
 - `python mock/mock_server.py`: Standard baseline stream with intermittent motion visits.
+- `python mock/mock_server.py --scenario triangle`: Simulates danger triangle visits cycling through approach, inside moving, inside still, leaving, and clear.
+- `python mock/mock_server.py --scenario triangle --sides left`: Runs triangle simulation with only the installed left side.
 - `python mock/mock_server.py --scenario zone`: Simulates perimeter work-zone visits cycling through CLEAR, APPROACH with descending radar distance (5.5 m down to 1.0 m), and inside ALERT.
 - `python mock/mock_server.py --scenario chaos`: Stress-tests dashboard resilience with malformed JSON, out-of-range values, missing fields, an array of two messages in one frame, and a 5-second silence.
 - `python mock/mock_server.py --legacy`: Emits legacy field names (`timestamp`, `detected`, `motion_score`) without `alert` or `distance_m`.
@@ -106,8 +108,8 @@ python mock/mock_server.py
 Perrymeter operates as a perimeter safety fence:
 
 - **CLEAR:** Zone is secure. No motion detected near the perimeter.
-- **APPROACH:** A person has entered the outer radar detection field and is approaching the fence line. The triangle zone map highlights the approaching side and radar fan.
-- **ALERT:** An active intrusion has crossed into the protected work zone. The zone map highlights the crossed side in alert color with a pulsing glow, and retains alert status while the person remains inside.
+- **APPROACH:** Activity detected at an installed side or a person approaching the fence line. The triangle zone map highlights the active side in warning yellow.
+- **ALERT:** The radar detects a person inside the protected work zone. The zone map sustains alert status while the person remains inside, moving or still.
 
 ### Arming and alarm audio
 
