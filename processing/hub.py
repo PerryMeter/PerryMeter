@@ -18,12 +18,18 @@ the live numbers below and has the Calibrate button.
 
 What the dashboard gets
     alert       "inside"   the radar sees a person in range, moving or still (the rule in
-                           radar_settings.py, held for HOLD_S). With the experimental
+                           radar_settings.py, held for HOLD_S; still readings past the front line
+                           and readings the module calls "nobody" are ignored when starting to
+                           track someone, but not for someone already tracked, see
+                           STILL_MAX_FRACTION and STILL_JUMP_CM). With the experimental
                            --entry-logic they must also have entered (see ZoneGate).
                            With --esp1, once someone has been inside EXIT_MIN_INSIDE_S, a Wi-Fi side
-                           firing again means they crossed out: they are no longer tracked (the
-                           radar may still see them just outside the line) until a side fires
-                           again after REENTRY_QUIET_S, or the radar loses them.
+                           crossing (CROSS_EVIDENCE) while the radar sees them moving
+                           (EXIT_PENDING_S) means they crossed out: they are no longer tracked (the
+                           radar may still see them just outside the line) until a side crosses
+                           again after REENTRY_QUIET_S, they come back in through the front
+                           (FRONT_OUT_FRACTION), the radar reads them at the hub
+                           (CLOSE_REENTRY_CM), or the radar loses them.
                 "approach" a Wi-Fi side is active (someone at a side). Nothing past the zone
                            (MAX_DISTANCE_CM) is tracked unless --approach-cm is given.
                 "clear"    otherwise
@@ -46,7 +52,10 @@ to leave the area, the hub measures the empty zone and sets
     the radar thresholds          99th percentile of the empty energy + 10, at least 20, at most
                                   100 (the same method as radar_calibrate.py)
 Results are saved to processing/hub_calibration.json and radar_calibration.json (shared with
-radar_plot.py and radar_server.py), and loaded again at start.
+radar_plot.py and radar_server.py), and loaded again at start. Afterwards each Wi-Fi side keeps
+following the room: while the radar sees nobody, its baseline and threshold are rescaled to its
+quiet level over the last minute (FOLLOW_ROOM_S), so a nudged ESP or a changed room does not
+leave a side too sensitive or deaf. The status line shows that scale as "(x0.51)".
 
 Wi-Fi activity score: for each 0.5 s window, every packet's amplitudes are divided by that
 packet's median amplitude (this removes automatic gain changes), and the score is the median,
@@ -82,6 +91,37 @@ SEND_RATE = 10         # messages per second to the dashboard
 STALE_S = 1.0          # no data for this long: send nothing
 ESP1_SILENT_RESET_S = 5.0   # ESP1 silent this long after opening its port: restart it
 HOLD_S = 1.0           # radar presence stays on this long after the radar loses the person
+# (No longer hold for still people: the walk test at 22:10 showed the radar reads someone standing
+# still at energy 100. The CLEARs while standing were false "crossed out"s from the Wi-Fi.)
+# A still reading only counts closer than this share of the radar's range. The zone's front line
+# (between the two Wi-Fi ESPs, 2 m from the hub) is 1.73 m away in the middle, so a still target
+# past about 1.75 m is someone standing just outside the front (seen live: a still target at
+# 188-191 cm gave a 7.7 s ALERT with nobody in the zone). Moving readings still count out to
+# MAX_DISTANCE_CM, so someone walking in from the front is caught early.
+STILL_MAX_FRACTION = 0.8
+# Moving readings count out to this share of the range (about 1.87 m): someone standing 0.3 m past
+# the front line read 208-217 cm moving and kept flicking the ALERT on (22:28 walk test). Farther
+# moving readings are still used to see someone walk round to the front (FRONT_OUT_FRACTION).
+MOVING_MAX_FRACTION = 0.85
+# Readings only count while the LD2410C itself sees someone (its state is not "nobody"). Added for
+# weak still echoes at 69 cm with the module saying "nobody" (22:23 walk test, about 3 s of ALERT).
+# Both that filter and the still-past-the-front one only apply when STARTING to track someone.
+# Someone already tracked is kept through them (22:44:30-22:45:00: a person standing still at
+# 145 cm read energy 30-47, the module flipped between "still" and "nobody", and its still distance
+# jumped to 189-216 cm for up to 8 s while its moving slot stayed at 145; the filters dropped them
+# and the ALERT flickered). A far still reading only counts as that jump when it is at least
+# STILL_JUMP_CM from the last good distance (a slow walk out through the front moves a few cm per
+# reading) and the moving slot still points inside the zone (walking out, the moving slot is at the
+# far end), and it is held for at most STILL_JUMP_HOLD_S.
+STILL_JUMP_CM = 25
+STILL_JUMP_HOLD_S = 10.0
+# After crossing out, the radar keeps seeing the person just outside the line, so they are not
+# tracked. But the two lines meet at the hub: someone the radar reads within CLOSE_REENTRY_CM of it
+# for CLOSE_REENTRY_S is at the hub, inside. Seen live at 22:46:44-52: back in near the hub without
+# a clean crossing, standing at 30 cm, shown CLEAR; and the exit crossing at 22:46:52 then counted
+# as a re-entry. In all three recordings nobody who had crossed out read this close otherwise.
+CLOSE_REENTRY_CM = 60
+CLOSE_REENTRY_S = 1.0
 # Entry logic (with --esp1): the radar alone cannot tell inside from just outside a side, because
 # its view (about 120 degrees) is wider than the triangle's corner (60 degrees). So "inside" needs
 # an entry: a Wi-Fi side became active at most ENTRY_WINDOW_S before (or while) the radar sees the
@@ -89,15 +129,54 @@ HOLD_S = 1.0           # radar presence stays on this long after the radar loses
 # through the radar's side). Seen by the radar without an entry: "approach".
 ENTRY_WINDOW_S = 3.0
 FAR_ENTRY_FRACTION = 0.7
-# While the radar sees someone, a side only needs to reach this share of its threshold to count as
-# the entry (the Wi-Fi alone caught only 11-12 of 19 crossings in Rayhan's recording). APPROACH and
-# crossing back out still need the full threshold.
+# Side levels are measured from the side's quiet level: 0 there, 1.0 at its threshold. (Not from
+# zero: a threshold is often just twice the quiet level, so 60% of the threshold itself sat inside
+# the noise; the right side flickered over it 37 times a minute in an empty room.)
+# Naming the side someone came in through only needs ENTRY_EVIDENCE: the radar already decided
+# they are inside, so a weak side reading is fine for the arrow.
 ENTRY_EVIDENCE = 0.6
-# Leaving: once inside for EXIT_MIN_INSIDE_S, a Wi-Fi side rising to ENTRY_EVIDENCE again means
-# they crossed out. The radar may still see them outside, so the zone drops to "approach" until a
-# new entry. The side they left through only counts as an entry again after REENTRY_QUIET_S quiet.
-EXIT_MIN_INSIDE_S = 2.0
+# Crossing out (and back in after that) needs a side at CROSS_EVIDENCE, its full threshold, and it
+# only counts again once the side fell below CROSS_REARM. Every point in the 2 m triangle is within
+# 0.58 m of a side, so someone just standing inside lifts the sides: in the 22:10 walk test,
+# standing inside reached 0.60-0.66 (each one a false "crossed out" at the old 0.6 level, so CLEAR
+# while the radar saw them at energy 100), while real crossings reached 1.4-1.9.
+CROSS_EVIDENCE = 1.0
+CROSS_REARM = 0.8
+# ...for CROSS_REARM_S in a row: one crossing comes in bursts. Seen live at 22:20: in over the left
+# (1.6), under 0.8 for 1.4 s, then 1.15 again while they were still by the line inside, which was
+# a false "crossed out". Their real exit came after 6 s quiet.
+CROSS_REARM_S = 2.0
+# Leaving: a side crossing EXIT_MIN_INSIDE_S or more after the crossing they came in by (or after
+# the radar first saw them) means they crossed out. Near the hub both sides fire together on the
+# way in (0.12 s apart at 22:11:43); walking straight through, in left and out right, took 1.45 s
+# (22:26:58). The radar may still see them outside, so they are not tracked until a new entry. The
+# side they left through only counts as an entry again after REENTRY_QUIET_S under ENTRY_EVIDENCE.
+EXIT_MIN_INSIDE_S = 0.8
 REENTRY_QUIET_S = 2.0
+# ...and only while the radar sees the person moving: crossing a line means walking. In all three
+# recordings every real exit crossing had the radar's 1 s averaged movement at 33-100 (raw energy
+# 80-100 in the second before), while a person standing still inside at 145 cm lifted the left to
+# 1.16 with movement 0 (22:44:54), which counted as crossing out. A crossing edge without movement
+# stays pending for EXIT_PENDING_S: if the radar sees movement while the side is still over
+# CROSS_REARM, they stepped out from right by the line and it is an exit after all.
+EXIT_PENDING_S = 1.0
+# The radar sees past the sides, so it can see someone before they cross in. If no side has crossed
+# yet, the first crossing within ENTRY_GRACE_S of the radar seeing them is their way in, not out.
+ENTRY_GRACE_S = 5.0
+# Coming back in through the radar's side (the front, no Wi-Fi link) after crossing out: a moving
+# reading at FRONT_OUT_FRACTION of its range or farther, then within FRONT_WINDOW_S a moving
+# reading at FRONT_IN_FRACTION or closer. Moving readings only: the radar's still target can sit
+# at the far end while the person is close (seen live), which is not someone walking in.
+FRONT_OUT_FRACTION = 0.85
+FRONT_IN_FRACTION = 0.7
+FRONT_WINDOW_S = 3.0
+# ...and they must stay out there this long: the radar's moving target can jump to the far end for
+# a single reading (seen live: 104 cm, 208 cm, 104 cm), which faked a front entry
+FRONT_OUT_MIN_S = 0.4
+# After crossing out, the radar often loses and finds again the person standing just outside the
+# line. Up to this long without them still counts as the same person outside (seen live: gaps of
+# 1-2 s for about 5 s, each one a fresh "entry" before).
+LEFT_ZONE_MEMORY_S = 5.0
 MOTION_ON_S = 0.3      # radar: seconds of movement before motion turns on
 MOTION_OFF_S = 0.7     # radar: seconds without it before motion turns off
 LINK_ON_S = 0.5        # Wi-Fi side: seconds over the threshold before it counts as active
@@ -109,6 +188,14 @@ LINK_MIN_PACKETS = 4   # fewer packets than this in a window: no score (a side c
 LINK_OFFLINE_S = 2.0   # no packet from a side for this long: that node is offline
 DEFAULT_LINK_THRESHOLD = 0.15   # used until the first calibration
 DEFAULT_LINK_BASELINE = 0.03    # typical empty-zone score, used until the first calibration
+# Following the room: each side's quiet level is the median of its score over the last
+# FOLLOW_ROOM_S while the radar sees nobody and the side is not over its threshold. Its baseline
+# and threshold are the calibrated ones scaled by (quiet level / calibrated baseline), within
+# FOLLOW_SCALE, once there are FOLLOW_MIN_S of quiet. Seen live: an ESP nudged after calibrating
+# went from -75 to -70 dBm and its quiet score halved, which left that side 4x too insensitive.
+FOLLOW_ROOM_S = 60
+FOLLOW_MIN_S = 15
+FOLLOW_SCALE = (0.4, 2.5)
 CALIBRATION_MARGIN = 1.5        # side threshold = this x the 99th percentile of its empty-zone score
 CALIBRATION_FLOOR = 0.02
 # Both Wi-Fi links end at ESP1, so someone at one side also stirs the other link. A side only
@@ -203,6 +290,36 @@ class Link:
         self.over = False        # past a threshold (with hysteresis), before the side-vs-side check
         self.motion = False
         self._delay = Delay(LINK_ON_S, LINK_OFF_S)
+        # Following the room (see FOLLOW_ROOM_S): threshold and baseline above are the calibrated
+        # ones; thr() and base() are what is used now
+        self.quiet_scores = collections.deque(maxlen=FOLLOW_ROOM_S * SEND_RATE)
+        self.scale = 1.0
+        self._scale_at = 0.0
+
+    def thr(self):
+        return self.threshold * self.scale
+
+    def base(self):
+        return self.baseline * self.scale
+
+    def reset_follow(self):
+        """Start following the room afresh (after a calibration)."""
+        self.quiet_scores.clear()
+        self.scale = 1.0
+
+    def follow_level(self, now):
+        """While the radar sees nobody: record the quiet score and rescale every 2 s."""
+        if self.score is not None and not self.over and not self.motion:
+            self.quiet_scores.append(self.score)
+        if now - self._scale_at >= 2.0 and len(self.quiet_scores) >= FOLLOW_MIN_S * SEND_RATE \
+                and self.baseline > 0:
+            self._scale_at = now
+            lo, hi = FOLLOW_SCALE
+            self.scale = round(min(hi, max(lo, float(np.median(self.quiet_scores)) / self.baseline)), 3)
+
+    def evidence(self):
+        """Share of the way from the quiet level up to the threshold (1.0 = at the threshold)."""
+        return 2.0 * self.strength()
 
     def add(self, t, rssi, amp):
         self.packets.append((t, rssi, amp))
@@ -234,7 +351,7 @@ class Link:
                         m = self.base_mask
                         self.block = float(np.nanmedian(np.abs(self.cur_shape[m] - self.base_shape[m])))
         over_motion = self.score is not None and self.score >= (
-            0.8 * self.threshold if self.motion else self.threshold)
+            0.8 * self.thr() if self.motion else self.thr())
         over_block = (self.block is not None and self.block_threshold is not None and self.block >= (
             0.8 * self.block_threshold if self.motion else self.block_threshold))
         self.over = over_motion or over_block
@@ -251,7 +368,7 @@ class Link:
 
     def relative(self):
         """How far over its thresholds the side is (1.0 = exactly at one of them)."""
-        rel = 0.0 if self.score is None or self.threshold <= 0 else self.score / self.threshold
+        rel = 0.0 if self.score is None or self.thr() <= 0 else self.score / self.thr()
         if self.block is not None and self.block_threshold:
             rel = max(rel, self.block / self.block_threshold)
         return rel
@@ -267,8 +384,8 @@ class Link:
         (the larger of the activity and line-blocked versions)."""
         best = 0.0
         if self.score is not None:
-            span = max(1e-6, self.threshold - self.baseline)
-            best = 0.5 * (self.score - self.baseline) / span
+            span = max(1e-6, self.thr() - self.base())
+            best = 0.5 * (self.score - self.base()) / span
         if self.block is not None and self.block_threshold and self.block_baseline is not None:
             span = max(1e-6, self.block_threshold - self.block_baseline)
             best = max(best, 0.5 * (self.block - self.block_baseline) / span)
@@ -287,6 +404,7 @@ def update_links(links, now, quiet):
         link.motion = link._delay.update(want, now)
         if quiet:
             link.follow_room()
+            link.follow_level(now)
 
 
 class Esp1Stats:
@@ -468,8 +586,11 @@ class RadarLogic:
     def __init__(self, approach_cm):
         self.approach_cm = approach_cm
         self.motion = Delay(MOTION_ON_S, MOTION_OFF_S)
-        self.last_inside_at = None
+        self.last_inside_at = None   # last reading that counted or was held (HOLD_S runs from it)
         self.last_inside_cm = None
+        self.last_good_at = None     # last reading that counted on its own (not held)
+        self.prev_still_cm = None    # the previous frame's still distance (to see a jump)
+        self.jump_since = None       # since when the still slot has sat past the front after a jump
 
     def far_target_cm(self, frame, avg_m, avg_s):
         """Someone beyond the zone, only when --approach-cm reaches past it (off by default:
@@ -487,13 +608,45 @@ class RadarLogic:
     def update(self, frame, avg_m, avg_s, now):
         _state, m_cm, _m_en, s_cm, _s_en, _d_cm = frame
         prediction, dist_cm = rs.classify(avg_m, avg_s, m_cm, s_cm)
-        if prediction != "nothing":
-            self.last_inside_at, self.last_inside_cm = now, dist_cm
+        beyond_front = ((prediction == "still" and dist_cm > STILL_MAX_FRACTION * rs.MAX_DISTANCE_CM)
+                        or (prediction == "moving" and dist_cm > MOVING_MAX_FRACTION * rs.MAX_DISTANCE_CM))
+        module_sees = _state != 0
+        tracking = self.last_inside_at is not None and now - self.last_inside_at < HOLD_S
+        held = False   # kept through a module dropout or a still-distance jump (see STILL_JUMP_CM)
+        # A jump: the still slot moved STILL_JUMP_CM or more between two frames (a walk moves it a
+        # few cm per frame). It stays "jumped" while it sits past the front line.
+        jumped = self.prev_still_cm is not None and abs(s_cm - self.prev_still_cm) >= STILL_JUMP_CM
+        if prediction != "nothing" and not beyond_front and module_sees:
+            self.last_inside_at, self.last_inside_cm, self.last_good_at = now, dist_cm, now
+            self.jump_since = None
+        elif prediction != "nothing" and tracking:
+            if not beyond_front:
+                # Module says "nobody" but the energy is still over the threshold: same person
+                held, self.last_inside_cm, self.jump_since = True, dist_cm, None
+            elif (prediction == "still" and m_cm <= STILL_MAX_FRACTION * rs.MAX_DISTANCE_CM
+                  and (jumped or self.jump_since is not None)
+                  and now - self.last_good_at < STILL_JUMP_HOLD_S):
+                # The still slot jumped to the far end while the moving slot still points inside:
+                # the same person at their last good distance
+                held = True
+                if self.jump_since is None:
+                    self.jump_since = now
+            else:
+                self.jump_since = None
+            if held:
+                self.last_inside_at = now
+        else:
+            self.jump_since = None
+        self.prev_still_cm = s_cm
         holding = self.last_inside_at is not None and now - self.last_inside_at < HOLD_S
         far_cm = None if holding else self.far_target_cm(frame, avg_m, avg_s)
         moving = self.motion.update(prediction == "moving", now)
         return {"prediction": prediction, "inside": holding,
                 "inside_cm": self.last_inside_cm if holding else None,
+                "moving_cm": dist_cm if prediction == "moving" and module_sees else None,
+                "still_beyond_front": beyond_front,
+                "module_nobody": prediction != "nothing" and not module_sees,
+                "held": held,
                 "far_cm": far_cm, "moving": moving}
 
 
@@ -510,67 +663,164 @@ class ZoneGate:
         self.present_before = False
         self.exit_at = 0.0
         self.last_rise = {}          # side -> last time its entry evidence started (ENTRY_EVIDENCE)
+        self.last_cross = {}         # side -> last time it crossed (CROSS_EVIDENCE)
         self.prev_evidence = {}
+        self.cross_armed = {}        # side -> quiet (CROSS_REARM_S) since its last crossing
+        self.cross_quiet_since = {}  # side -> since when it has been under CROSS_REARM
         self.quiet_since = {}        # side -> since when its evidence has been low
         self.blocked = set()         # sides someone just left through (see REENTRY_QUIET_S)
+        self.out_front_at = None     # after crossing out: when the radar last saw them out past the front
+        self.far_since = None        # since when the moving readings have been out past the front
+        self.lost_at = None          # after crossing out: when the radar lost them (LEFT_ZONE_MEMORY_S)
+        self.close_since = None      # after crossing out: since when the radar reads them at the hub (CLOSE_REENTRY_CM)
+        self.entry_cross_at = None   # while inside: when the crossing they came in by happened
+        self.pending_exit = None     # while inside: (side, time) of a crossing edge the radar saw no movement for
         self.state = "clear"         # clear | inside | seen_no_entry | left_zone
 
     def reset_sides(self):
         """Forget per-side history (after the sides were renamed)."""
-        self.last_rise, self.prev_evidence, self.quiet_since = {}, {}, {}
-        self.blocked = set()
+        self.last_rise, self.last_cross, self.prev_evidence, self.quiet_since = {}, {}, {}, {}
+        self.cross_armed, self.cross_quiet_since, self.blocked = {}, {}, set()
 
-    def update(self, now, present, dist_cm, side_active, side_evidence):
-        """side_evidence: a side at ENTRY_EVIDENCE of its threshold or more. Its rising edges are
-        entries (and, once inside, exits). side_active (fully over) is kept for callers' symmetry."""
-        rose = []   # sides whose evidence just started
-        for side, ev in side_evidence.items():
+    def update(self, now, present, dist_cm, side_level, moving_cm=None):
+        """side_level: each side's level (0 at its quiet level, 1.0 at its threshold; 0 when
+        offline). ENTRY_EVIDENCE edges name the entry side; CROSS_EVIDENCE edges are crossings out
+        and back in. moving_cm: the radar's distance when this reading is a moving one."""
+        crossed = []   # sides that just crossed (see CROSS_EVIDENCE)
+        for side, level in side_level.items():
+            if level >= CROSS_EVIDENCE and self.cross_armed.get(side, True):
+                crossed.append(side)
+                self.cross_armed[side] = False
+                if side not in self.blocked:
+                    self.last_cross[side] = now
+            if level < CROSS_REARM:
+                since = self.cross_quiet_since.setdefault(side, now)
+                if now - since >= CROSS_REARM_S:
+                    self.cross_armed[side] = True
+            else:
+                self.cross_quiet_since.pop(side, None)
+            ev = level >= ENTRY_EVIDENCE
             if ev:
                 self.quiet_since.pop(side, None)
-                if not self.prev_evidence.get(side):
-                    rose.append(side)
-                    if side not in self.blocked:
-                        self.last_rise[side] = now
+                if not self.prev_evidence.get(side) and side not in self.blocked:
+                    self.last_rise[side] = now
             else:
                 since = self.quiet_since.setdefault(side, now)
                 if side in self.blocked and now - since >= REENTRY_QUIET_S:
                     self.blocked.discard(side)
             self.prev_evidence[side] = ev
 
+        # After crossing out: is the radar seeing them walk round to the front (no Wi-Fi link
+        # there)? Out past the front line for FRONT_OUT_MIN_S, then in again soon after. Tracked
+        # even while they do not count as present (moving readings that far out do not).
+        front_entry = False
+        if self.state == "left_zone":
+            if moving_cm is not None and moving_cm >= FRONT_OUT_FRACTION * rs.MAX_DISTANCE_CM:
+                if self.far_since is None:
+                    self.far_since = now
+                if now - self.far_since >= FRONT_OUT_MIN_S:
+                    self.out_front_at = now
+            else:
+                self.far_since = None
+                if (present and moving_cm is not None and self.out_front_at is not None
+                        and now - self.out_front_at <= FRONT_WINDOW_S
+                        and moving_cm <= FRONT_IN_FRACTION * rs.MAX_DISTANCE_CM):
+                    front_entry = True
+        # ...or standing at the hub, where the two lines meet (CLOSE_REENTRY_CM)? Then they are back
+        # inside even without a clean crossing (near the hub the sides fire together or not at all).
+        close_entry = False
+        if self.state == "left_zone" and present and dist_cm is not None and dist_cm <= CLOSE_REENTRY_CM:
+            if self.close_since is None:
+                self.close_since = now
+            close_entry = now - self.close_since >= CLOSE_REENTRY_S
+        else:
+            self.close_since = None
+
         if not present:
+            if self.state == "left_zone":
+                # Someone who crossed out and is standing just outside: the radar drops them now
+                # and then. Only forget them after LEFT_ZONE_MEMORY_S.
+                if self.lost_at is None:
+                    self.lost_at = now
+                if now - self.lost_at < LEFT_ZONE_MEMORY_S:
+                    return
             self.inside, self.entry_side, self.inside_since = False, None, None
             self.first_seen_cm, self.present_before, self.state = None, False, "clear"
+            self.out_front_at = self.far_since = self.lost_at = self.entry_cross_at = None
+            self.close_since = self.pending_exit = None
             return
+        self.lost_at = None
         if not self.present_before:
             self.first_seen_cm, self.present_before = dist_cm, True
 
         if self.inside:
-            # Crossing back out: a side fires again after they have been inside a moment. The radar
-            # may still see them outside (it has no direction), so stop tracking them.
-            if self.exit_on_crossing and rose and now - self.inside_since >= EXIT_MIN_INSIDE_S:
-                self.inside, self.entry_side, self.inside_since = False, None, None
-                self.exit_at, self.first_seen_cm, self.state = now, None, "left_zone"
-                # Standing just outside keeps stirring that side: it must go quiet before it can
-                # count as a new entry, or they would be counted back in again and again
-                self.blocked.update(rose)
-                for side in rose:
-                    self.last_rise.pop(side, None)
+            # A crossing only counts while the radar sees them moving (see EXIT_PENDING_S). Without
+            # movement it waits a moment in case the step out is just starting; a pending crossing
+            # is dropped once the side has fallen back under CROSS_REARM or the wait is over.
+            radar_moving = moving_cm is not None
+            if self.pending_exit is not None:
+                side, since = self.pending_exit
+                if now - since > EXIT_PENDING_S or side_level.get(side, 0.0) < CROSS_REARM:
+                    self.pending_exit = None
+                elif radar_moving and side not in crossed:
+                    crossed.append(side)
+            if crossed and not radar_moving:
+                if self.pending_exit is None:
+                    self.pending_exit = (crossed[0], now)
+                crossed = []
+            if self.exit_on_crossing and crossed:
+                self.pending_exit = None
+                if self.entry_cross_at is None and now - self.inside_since < ENTRY_GRACE_S:
+                    # The radar saw them before any side crossed: this crossing is their way in
+                    self.entry_side, self.entry_cross_at = crossed[0], now
+                elif now - (self.entry_cross_at or self.inside_since) >= EXIT_MIN_INSIDE_S:
+                    # Crossing back out. The radar may still see them outside (it has no
+                    # direction), so stop tracking them.
+                    self.inside, self.entry_side, self.inside_since = False, None, None
+                    self.exit_at, self.first_seen_cm, self.state = now, None, "left_zone"
+                    self.out_front_at = self.far_since = self.entry_cross_at = None
+                    # Standing just outside keeps stirring that side: it must go quiet before it
+                    # can count as a new entry, or they would be counted back in again and again
+                    self.blocked.update(crossed)
+                    for side in crossed:
+                        self.last_rise.pop(side, None)
+                        self.last_cross.pop(side, None)
             return
 
         recent = [(t, s) for s, t in self.last_rise.items() if now - t <= ENTRY_WINDOW_S and t > self.exit_at]
+        recent_cross = [(t, s) for s, t in self.last_cross.items()
+                        if now - t <= ENTRY_WINDOW_S and t > self.exit_at]
         far = self.first_seen_cm is not None and self.first_seen_cm >= FAR_ENTRY_FRACTION * rs.MAX_DISTANCE_CM
-        if not self.enabled and self.state != "left_zone":
+        if front_entry:
+            self.inside, self.entry_side = True, "base"
+        elif close_entry:
+            # Back in at the hub: the arrow gets the last side that stirred, if any
+            self.inside, self.entry_side = True, (max(recent)[1] if recent else None)
+        elif not self.enabled and self.state != "left_zone":
             # Radar decides: anyone in range is inside. The Wi-Fi sides only name the entry side
-            # (for the arrow); they never hold back an ALERT.
+            # (for the arrow); they never hold back an ALERT. A side that crossed names it, else
+            # the front when first seen far out, else the last side that stirred.
             self.inside = True
-            self.entry_side = max(recent)[1] if recent else ("base" if far else None)
+            if recent_cross:
+                self.entry_side = max(recent_cross)[1]
+            else:
+                self.entry_side = "base" if far else (max(recent)[1] if recent else None)
+        elif self.state == "left_zone":
+            # Coming back in after crossing out: a side must cross again (full threshold)
+            if recent_cross:
+                self.inside, self.entry_side = True, max(recent_cross)[1]
         elif recent:
-            # Entry logic, or coming back in after crossing out: needs a side to fire again
+            # Entry logic (--entry-logic): a side fired before or while the radar sees them
             self.inside, self.entry_side = True, max(recent)[1]
         elif far:
             self.inside, self.entry_side = True, "base"
         if self.inside:
             self.inside_since, self.state = now, "inside"
+            self.close_since = self.pending_exit = None
+            # The crossing they came in by (EXIT_MIN_INSIDE_S counts from it). A front or close
+            # entry is the entry itself, so the next crossing is their way out
+            self.entry_cross_at = (max(recent_cross)[0] if recent_cross
+                                   else (now if front_entry or close_entry else None))
         elif self.state != "left_zone":
             self.state = "seen_no_entry"
 
@@ -636,6 +886,7 @@ class Calibrator:
             link.baseline = round(float(np.median(vals)), 4)
             link.threshold = round(max(CALIBRATION_FLOOR, CALIBRATION_MARGIN * p99, 2 * link.baseline), 4)
             link.calibrated, link.calibrated_at = True, now_text()
+            link.reset_follow()
             results["links"][side] = {"mac": link.mac, "threshold": link.threshold,
                                       "empty_median": link.baseline,
                                       "empty_p99": round(p99, 4), "windows": len(vals)}
@@ -862,8 +1113,9 @@ async def run(args):
                 # and no calibration is running
                 quiet = radar_fresh and not r["inside"] and calibrator.state not in ("countdown", "measuring")
                 update_links(links, now, quiet)
-                link_info = {s: (l.stats(now), l.score, l.threshold, l.calibrated, l.motion, l.strength(),
-                                 l.baseline, l.block, l.block_threshold, l.relative())
+                link_info = {s: (l.stats(now), l.score, round(l.thr(), 4), l.calibrated, l.motion, l.strength(),
+                                 round(l.base(), 4), l.block, l.block_threshold, l.relative(), l.evidence(),
+                                 l.scale)
                              for s, l in links.items()}
             radar_sample = None
             if radar_fresh:
@@ -875,8 +1127,8 @@ async def run(args):
             side_active = [s for s, info in link_info.items() if info[0][0] and info[4]]
             radar_present = bool(r and r["inside"])
             gate.update(now, radar_present, r["inside_cm"] if r else None,
-                        {s: bool(info[0][0] and info[4]) for s, info in link_info.items()},
-                        {s: bool(info[0][0] and info[9] >= ENTRY_EVIDENCE) for s, info in link_info.items()})
+                        {s: (info[10] if info[0][0] else 0.0) for s, info in link_info.items()},
+                        moving_cm=r["moving_cm"] if r else None)
 
             any_link_fresh = any(info[0][0] for info in link_info.values())
             if not radar_fresh and not any_link_fresh:
@@ -924,7 +1176,8 @@ async def run(args):
                                    "threshold": info[2], "baseline": info[6],
                                    "block": None if info[7] is None else round(info[7], 4),
                                    "block_threshold": info[8],
-                                   "calibrated": info[3], "motion": info[4]}
+                                   "calibrated": info[3], "motion": info[4],
+                                   "evidence": round(info[10], 3), "follow_scale": info[11]}
                                   for s, info in link_info.items()],
                         "radar": None if not radar_fresh else {
                             "fps": radar_fps, "state": frame[0], "state_name": STATES.get(frame[0], str(frame[0])),
@@ -933,7 +1186,9 @@ async def run(args):
                             "avg_moving": round(avg_m, 1), "avg_still": round(avg_s, 1),
                             "moving_threshold": rs.MOVING_THRESHOLD, "still_threshold": rs.STILL_THRESHOLD,
                             "zone_cm": [rs.MIN_DISTANCE_CM, rs.MAX_DISTANCE_CM],
-                            "prediction": r["prediction"], "status": radar.status},
+                            "prediction": r["prediction"], "still_beyond_front": r["still_beyond_front"],
+                            "module_nobody": r["module_nobody"], "held": r["held"],
+                            "status": radar.status},
                         "esp1": {"lines_per_s": esp1.rate(now), "garbled": esp1.garbled} if args.esp1 else None,
                         "calibration": calibrator.status(now),
                         "zone": {"state": gate.state, "entry_side": gate.entry_side,
@@ -960,10 +1215,14 @@ async def run(args):
                     (online, pps, rssi), score, thr = info[0], info[1], info[2]
                     sc = "--" if score is None else f"{score:.3f}"
                     bl = "" if info[7] is None or info[8] is None else f" blk {info[7]:.3f}/{info[8]:g}"
-                    parts.append(f"{s} {pps}/s {rssi}dBm {sc}/{thr:g}{bl}{' ACTIVE' if info[4] else ''}"
+                    parts.append(f"{s} {pps}/s {rssi}dBm {sc}/{thr:g} (x{info[11]:g}){bl}"
+                                 f"{' ACTIVE' if info[4] else ''}"
                                  if online else f"{s} offline")
                 if radar_fresh:
-                    parts.append(f"radar {radar_fps}/s {r['prediction']} {frame[1]}/{frame[3]}cm")
+                    ignored = "held" if r["held"] else "ignored"
+                    parts.append(f"radar {radar_fps}/s {r['prediction']} {frame[1]}/{frame[3]}cm"
+                                 f"{f' (past the front, {ignored})' if r['still_beyond_front'] else ''}"
+                                 f"{f' (module: nobody, {ignored})' if r['module_nobody'] else ''}")
                 else:
                     parts.append("radar no data")
                 parts.append(f"alert {msg['alert'] if msg else '-'} ({gate.state}"

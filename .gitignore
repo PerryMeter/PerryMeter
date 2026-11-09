@@ -42,3 +42,6 @@ processing/hub_calibration.json
 
 # Room calibration for the radar (one per room; never commit)
 radar_calibration.json
+
+# Walk-test recordings for processing/replay (10-15 MB each; never commit)
+processing/replay/recordings/
