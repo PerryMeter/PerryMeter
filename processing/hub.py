@@ -344,15 +344,22 @@ def esp1_reader(port, baud, radar, links, links_lock, stats, csi_path):
                 print(f"ESP1: opened {port}", flush=True)
                 buf = b""
                 quiet_since = time.time()
+                silent_resets = 0
                 while True:
                     # Opening the port can leave ESP1 stuck in reset or its bootloader (seen on the
-                    # Pi). If it sends nothing for ESP1_SILENT_RESET_S, pulse EN through RTS (DTR
-                    # stays off, so it boots normally) to restart it.
+                    # Pi right after it boots). If it sends nothing for ESP1_SILENT_RESET_S, pulse EN
+                    # through RTS with DTR off (a normal boot). If that does not bring it back, close
+                    # and reopen the port: a fresh open is what fixed it by hand on the Pi.
                     if time.time() - max(stats.last_line, quiet_since) > ESP1_SILENT_RESET_S:
+                        if silent_resets >= 1:
+                            print("ESP1: still no data, reopening the port", flush=True)
+                            break
                         print("ESP1: no data, restarting it", flush=True)
+                        ser.dtr = False
                         ser.rts = True
                         time.sleep(0.2)
                         ser.rts = False
+                        silent_resets += 1
                         quiet_since = time.time()
                     buf += ser.read(ser.in_waiting or 1)
                     *lines, buf = buf.split(b"\n")
@@ -383,6 +390,8 @@ def esp1_reader(port, baud, radar, links, links_lock, stats, csi_path):
                         elif line.startswith("RADAR_STATUS"):
                             radar.status = line
                             print(f"ESP1: {line}", flush=True)
+            # Only reached after "reopening the port": give the USB chip a moment, then open again
+            time.sleep(1)
         except serial.SerialException as e:
             print(f"ESP1: problem on {port}: {e} (retrying in 2 s)", flush=True)
             time.sleep(2)
