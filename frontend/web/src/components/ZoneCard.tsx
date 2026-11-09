@@ -1,5 +1,7 @@
 import type { AlertLevel, Detection } from '../lib/contract';
 import type { DetectionEvent } from '../hooks/useDetectionStream';
+import type { Units } from '../lib/settings';
+import { formatMetres } from '../lib/units';
 
 type ZoneCardProps = {
   latest: Detection | null;
@@ -9,79 +11,51 @@ type ZoneCardProps = {
   armed: boolean;
   isFresh: boolean;
   now: number;
+  units: Units;
+  onSelect?: () => void;
   className?: string;
 };
 
-export function ZoneCard({
-  latest,
-  events,
-  alert,
-  distanceM,
-  armed,
-  isFresh,
-  now,
-  className,
-}: ZoneCardProps) {
+export function ZoneCard({ latest, events, alert, distanceM, armed, isFresh, now, units, onSelect, className }: ZoneCardProps) {
   let valueText = '--';
   let valueColor = 'text-faint';
   let captionText = 'No data';
-  let cardStyles = 'bg-surface border-line';
-  let cardInlineStyle: React.CSSProperties = {};
+  let cardStyles = 'border-line';
 
   if (isFresh && alert !== null) {
     if (!armed) {
-      // Disarmed state
       valueText = 'DISARMED';
       valueColor = 'text-muted';
-      captionText =
-        alert === 'inside'
-          ? 'Person in zone, logged only'
-          : 'Entries are logged without an alarm';
-      cardStyles = 'bg-surface border-line';
+      captionText = alert === 'inside' ? 'Person in zone, logged only' : 'Entries are logged without an alarm';
     } else if (alert === 'inside') {
-      // ALERT state
       valueText = 'ALERT';
-      valueColor = 'text-motion';
-      const ongoingEvent =
-        events.length > 0 && events[0].endAt === null ? events[0] : null;
-      const durationSec = ongoingEvent
-        ? Math.max(0, (now - ongoingEvent.startAt) / 1000)
-        : 0;
-      const notMovingSuffix =
-        isFresh && latest?.motion === false ? ', not moving' : '';
+      valueColor = 'text-alert';
+      const ongoingEvent = events.length > 0 && events[0].endAt === null ? events[0] : null;
+      const durationSec = ongoingEvent ? Math.max(0, (now - ongoingEvent.startAt) / 1000) : 0;
+      const notMovingSuffix = latest?.motion === false ? ', not moving' : '';
       const side = ongoingEvent?.side ?? null;
-      const fromSuffix =
-        side === 'base' ? ', from the radar side' : side ? `, from the ${side} side` : '';
-      if (ongoingEvent) {
-        captionText = `Person in zone for ${durationSec.toFixed(1)} s${fromSuffix}${notMovingSuffix}`;
-      } else {
-        captionText = `Person in zone${fromSuffix}${notMovingSuffix}`;
-      }
-      cardStyles = 'border-motion/60 animate-alert-glow';
-      cardInlineStyle = {
-        backgroundColor:
-          'color-mix(in srgb, var(--color-motion) 6%, var(--color-surface))',
-      };
+      const fromSuffix = side === 'base' ? ', from the front' : side ? `, from the ${side} side` : '';
+      const distSuffix = distanceM !== null ? `, ${formatMetres(distanceM, units)} from the hub` : '';
+      captionText = ongoingEvent
+        ? `Person in zone for ${durationSec.toFixed(1)} s${fromSuffix}${distSuffix}${notMovingSuffix}`
+        : `Person in zone${fromSuffix}${distSuffix}${notMovingSuffix}`;
+      cardStyles = 'border-alert';
     } else if (alert === 'approach') {
-      // APPROACH state
       valueText = 'APPROACH';
       valueColor = 'text-warn';
-      // Name a side only when that side is actually active. Otherwise the radar is what saw them
-      // (in range, but no entry), so give its distance from the hub.
       const movingLinks = (latest?.links ?? []).filter((l) => l.motion);
       if (movingLinks.length > 0) {
         const bestLink = [...movingLinks].sort((a, b) => b.strength - a.strength)[0];
         captionText = `Activity at the ${bestLink.id} side`;
       } else if (distanceM !== null) {
-        captionText = `Someone near the zone, ${distanceM.toFixed(1)} m from the hub`;
+        captionText = `Someone near the zone, ${formatMetres(distanceM, units)} from the hub`;
       } else {
         captionText = 'Someone near the zone';
       }
-      cardStyles = 'bg-surface border-warn/50';
+      cardStyles = 'border-warn';
     } else {
-      // CLEAR state
       valueText = 'CLEAR';
-      valueColor = 'text-accent';
+      valueColor = 'text-text';
       const lastCompleted = events.find((e) => e.endAt !== null);
       if (lastCompleted && lastCompleted.endAt !== null) {
         const agoSec = Math.max(0, Math.round((now - lastCompleted.endAt) / 1000));
@@ -89,32 +63,28 @@ export function ZoneCard({
       } else {
         captionText = 'Zone clear. No entries yet';
       }
-      cardStyles = 'bg-surface border-line';
     }
   }
 
+  const Tag = onSelect ? 'button' : 'div';
   return (
-    <div
-      className={`rounded-[10px] border flex flex-col justify-between transition-colors duration-200 ${
+    <Tag
+      type={onSelect ? 'button' : undefined}
+      onClick={onSelect}
+      className={`text-left w-full rounded-[10px] border bg-surface flex flex-col justify-between transition-colors duration-200 ${
         className?.includes('p-') ? '' : 'p-5'
-      } ${cardStyles} ${className ?? ''}`}
-      style={cardInlineStyle}
+      } ${cardStyles} ${className ?? ''} ${onSelect ? 'focus:outline-none focus-visible:ring-1 focus-visible:ring-text' : ''}`}
+      aria-label={onSelect ? `Zone status ${valueText}. Click for details` : undefined}
     >
       <div className="flex items-center justify-between">
-        <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted">
-          ZONE
-        </span>
-        {/* Element for screen readers updated only on value text change */}
+        <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted">Zone</span>
         <span className="sr-only" aria-live="polite">
           {valueText}
         </span>
       </div>
 
       <div className="my-1">
-        <span
-          className={`font-mono font-medium leading-none ${valueColor}`}
-          style={{ fontSize: 'clamp(48px, 8vh, 88px)' }}
-        >
+        <span className={`font-mono font-medium leading-none ${valueColor}`} style={{ fontSize: 'clamp(48px, 8vh, 88px)' }}>
           {valueText}
         </span>
       </div>
@@ -122,6 +92,6 @@ export function ZoneCard({
       <div>
         <p className="text-xs text-muted font-mono">{captionText}</p>
       </div>
-    </div>
+    </Tag>
   );
 }

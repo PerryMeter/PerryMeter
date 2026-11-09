@@ -1,60 +1,113 @@
 @import "tailwindcss";
 
-@theme static {
-  --color-bg: #070A0C;
-  --color-surface: #0D1316;
-  --color-surface-2: #121A1E;
-  --color-line: #1E2A2F;
-  --color-line-strong: #2B3B41;
-  --color-text: #E7EEF0;
-  --color-muted: #93A4AA;
-  --color-faint: #5B6B71;
-  --color-accent: #3DD6B0;
-  --color-motion: #FF8A3D;
-  --color-warn: #E8C14E;
-  --color-error: #F05A5A;
+/* Colour tokens. The utilities (bg-surface, text-muted, ...) read the --c-* variables, which the
+   [data-theme] attribute on <html> switches between dark and light. Rules: red only for ALERT,
+   amber for APPROACH, everything else neutral. */
+@theme inline {
+  --color-bg: var(--c-bg);
+  --color-surface: var(--c-surface);
+  --color-surface-2: var(--c-surface-2);
+  --color-line: var(--c-line);
+  --color-line-strong: var(--c-line-strong);
+  --color-text: var(--c-text);
+  --color-muted: var(--c-muted);
+  --color-faint: var(--c-faint);
+  --color-accent: var(--c-accent);
+  --color-motion: var(--c-alert);
+  --color-alert: var(--c-alert);
+  --color-warn: var(--c-warn);
 
   --font-sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: "IBM Plex Mono", monospace;
 }
 
-:root {
+:root,
+[data-theme="dark"] {
   color-scheme: dark;
+  --c-bg: #0f1214;
+  --c-surface: #161a1d;
+  --c-surface-2: #1e2429;
+  --c-line: #29323a;
+  --c-line-strong: #3d4954;
+  --c-text: #e8ecef;
+  --c-muted: #9aa5ac;
+  --c-faint: #66727a;
+  --c-accent: #9fb3bf;
+  --c-alert: #e5484d;
+  --c-warn: #d8a632;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --c-bg: #f2f4f5;
+  --c-surface: #ffffff;
+  --c-surface-2: #e9edf0;
+  --c-line: #d5dce1;
+  --c-line-strong: #aeb9c1;
+  --c-text: #171b1e;
+  --c-muted: #5c676e;
+  --c-faint: #97a2a9;
+  --c-accent: #4f6673;
+  --c-alert: #cf2f34;
+  --c-warn: #9c6d00;
 }
 
 body {
   margin: 0;
   min-height: 100dvh;
-  background-color: var(--color-bg);
-  background-image: radial-gradient(rgba(30, 42, 47, 0.35) 1px, transparent 1px);
-  background-size: 24px 24px;
-  color: var(--color-text);
+  background-color: var(--c-bg);
+  color: var(--c-text);
   font-family: var(--font-sans);
   font-size: 14px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-@keyframes alert-glow {
-  0%, 100% {
-    box-shadow: 0 0 16px rgba(255, 138, 61, 0.20);
-  }
-  50% {
-    box-shadow: 0 0 28px rgba(255, 138, 61, 0.45);
-  }
-}
-
-.animate-alert-glow {
-  animation: alert-glow 1.6s ease-in-out infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .animate-alert-glow {
-    animation: none;
-  }
-}
-
 html.cursor-none,
 html.cursor-none * {
   cursor: none !important;
+}
+
+/* Range inputs: a plain track and a square-cornered thumb in the text colour */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 20px;
+  background: transparent;
+  cursor: pointer;
+}
+input[type="range"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--c-line-strong);
+}
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--c-line-strong);
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 3px;
+  background: var(--c-text);
+  border: none;
+}
+input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  background: var(--c-text);
+  border: none;
+}
+input[type="range"]:focus-visible {
+  outline: 1px solid var(--c-text);
+  outline-offset: 2px;
 }

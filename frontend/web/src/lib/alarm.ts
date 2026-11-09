@@ -4,6 +4,19 @@ export class ZoneAlarm {
   private timerId: ReturnType<typeof setTimeout> | null = null;
   private currentOsc: OscillatorNode | null = null;
   private currentGain: GainNode | null = null;
+  private volume = 0.5;
+
+  /** 0 to 1; applies to the next tone (the loop plays a new tone about every second). */
+  setVolume(volume: number): void {
+    this.volume = Math.max(0, Math.min(1, volume));
+    if (this.currentGain && this.audioCtx) {
+      this.currentGain.gain.setValueAtTime(this.gainValue(), this.audioCtx.currentTime);
+    }
+  }
+
+  private gainValue(): number {
+    return 0.35 * this.volume;
+  }
 
   init(): void {
     if (!this.audioCtx && typeof window !== 'undefined') {
@@ -76,7 +89,7 @@ export class ZoneAlarm {
         const gain = this.audioCtx.createGain();
         osc.type = 'sine';
         osc.frequency.setValueAtTime(freq, this.audioCtx.currentTime);
-        gain.gain.setValueAtTime(0.2, this.audioCtx.currentTime);
+        gain.gain.setValueAtTime(this.gainValue(), this.audioCtx.currentTime);
 
         osc.connect(gain);
         gain.connect(this.audioCtx.destination);
