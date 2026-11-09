@@ -19,6 +19,12 @@ export type HubLinkDebug = {
   blockThreshold: number | null;
   calibrated: boolean;
   motion: boolean;
+  /** Side level: 0 at the quiet level, 1.0 at the threshold, capped at 2 (null from older hubs). */
+  evidence: number | null;
+  /** Room-following scale applied to the calibrated threshold (1 = as calibrated). */
+  followScale: number | null;
+  /** What the last calibration set, for "reset to calibrated" (null if never calibrated). */
+  calibratedThreshold: number | null;
 };
 
 export type HubRadarDebug = {
@@ -36,6 +42,31 @@ export type HubRadarDebug = {
   zoneCm: [number, number] | null;
   prediction: string | null;
   status: string | null;
+  /** The reading is a still target past the front line (ignored unless already tracked). */
+  stillBeyondFront: boolean;
+  /** The LD2410C itself says nobody while the energy is over the threshold. */
+  moduleNobody: boolean;
+  /** The reading was kept from the previous second through a dropout or a distance jump. */
+  held: boolean;
+};
+
+/** The numbers the Settings panel shows and adjusts (hub.py debug.settings). */
+export type HubSettings = {
+  baud: number | null;
+  baudFixed: boolean;
+  maxDistanceCm: number | null;
+  defaultMaxDistanceCm: number | null;
+  rangeLimitsCm: [number, number] | null;
+  stillMaxCm: number | null;
+  movingMaxCm: number | null;
+  farEntryCm: number | null;
+  movingThreshold: number | null;
+  stillThreshold: number | null;
+  calibratedMovingThreshold: number | null;
+  calibratedStillThreshold: number | null;
+  thresholdSource: string | null;
+  radarThresholdLimits: [number, number] | null;
+  linkThresholdLimits: [number, number] | null;
 };
 
 export type HubCalibration = {
@@ -51,6 +82,8 @@ export type HubZone = {
   entrySide: string | null;
   entryLogic: boolean;
   exitOnCrossing: boolean;
+  /** Sides someone just left through; they must go quiet before counting as an entry again. */
+  blockedSides: string[];
 };
 
 export type HubDebug = {
@@ -61,6 +94,7 @@ export type HubDebug = {
   esp1: { linesPerS: number | null; garbled: number | null } | null;
   calibration: HubCalibration | null;
   zone: HubZone | null;
+  settings: HubSettings | null;
 };
 
 type Obj = Record<string, unknown>;
@@ -94,17 +128,22 @@ function parseLink(v: unknown): HubLinkDebug | null {
     blockThreshold: num(v.block_threshold),
     calibrated: v.calibrated === true,
     motion: v.motion === true,
+    evidence: num(v.evidence),
+    followScale: num(v.follow_scale),
+    calibratedThreshold: num(v.calibrated_threshold),
   };
+}
+
+function pair(v: unknown): [number, number] | null {
+  if (!Array.isArray(v) || v.length !== 2) return null;
+  const lo = num(v[0]);
+  const hi = num(v[1]);
+  return lo !== null && hi !== null ? [lo, hi] : null;
 }
 
 function parseRadar(v: unknown): HubRadarDebug | null {
   if (!isObj(v)) return null;
-  let zoneCm: [number, number] | null = null;
-  if (Array.isArray(v.zone_cm) && v.zone_cm.length === 2) {
-    const lo = num(v.zone_cm[0]);
-    const hi = num(v.zone_cm[1]);
-    if (lo !== null && hi !== null) zoneCm = [lo, hi];
-  }
+  const zoneCm = pair(v.zone_cm);
   return {
     fps: num(v.fps),
     stateName: str(v.state_name),
@@ -120,6 +159,30 @@ function parseRadar(v: unknown): HubRadarDebug | null {
     zoneCm,
     prediction: str(v.prediction),
     status: str(v.status),
+    stillBeyondFront: v.still_beyond_front === true,
+    moduleNobody: v.module_nobody === true,
+    held: v.held === true,
+  };
+}
+
+function parseSettings(v: unknown): HubSettings | null {
+  if (!isObj(v)) return null;
+  return {
+    baud: num(v.baud),
+    baudFixed: v.baud_fixed !== false,
+    maxDistanceCm: num(v.max_distance_cm),
+    defaultMaxDistanceCm: num(v.default_max_distance_cm),
+    rangeLimitsCm: pair(v.range_limits_cm),
+    stillMaxCm: num(v.still_max_cm),
+    movingMaxCm: num(v.moving_max_cm),
+    farEntryCm: num(v.far_entry_cm),
+    movingThreshold: num(v.moving_threshold),
+    stillThreshold: num(v.still_threshold),
+    calibratedMovingThreshold: num(v.calibrated_moving_threshold),
+    calibratedStillThreshold: num(v.calibrated_still_threshold),
+    thresholdSource: str(v.threshold_source),
+    radarThresholdLimits: pair(v.radar_threshold_limits),
+    linkThresholdLimits: pair(v.link_threshold_limits),
   };
 }
 
@@ -159,7 +222,11 @@ export function parseHubDebug(raw: string): HubDebug | null {
           entrySide: str(d.zone.entry_side),
           entryLogic: d.zone.entry_logic === true,
           exitOnCrossing: d.zone.exit_on_crossing === true,
+          blockedSides: Array.isArray(d.zone.blocked_sides)
+            ? d.zone.blocked_sides.filter((s): s is string => typeof s === 'string')
+            : [],
         }
       : null,
+    settings: parseSettings(d.settings),
   };
 }

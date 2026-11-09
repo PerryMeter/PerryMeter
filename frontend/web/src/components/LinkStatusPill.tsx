@@ -7,65 +7,49 @@ type LinkStatusPillProps = {
   now: number;
 };
 
-export function LinkStatusPill({
-  status,
-  retryInS,
-  lastMessageAt,
-  now,
-}: LinkStatusPillProps) {
-  let dotColor = 'bg-accent';
-  let shouldPulse = false;
+/** Connection state as a dot and short text. Neutral colours: connection problems are not alerts. */
+export function LinkStatusPill({ status, retryInS, lastMessageAt, now }: LinkStatusPillProps) {
+  let dot = 'bg-accent';
   let text = '';
 
   switch (status) {
     case 'demo':
-      dotColor = 'bg-accent';
       text = 'Demo feed';
       break;
     case 'demo-paused':
-      dotColor = 'bg-warn';
+      dot = 'bg-warn';
       text = 'Demo feed paused';
       break;
     case 'connecting':
-      dotColor = 'bg-warn';
-      shouldPulse = true;
+      dot = 'bg-warn';
       text = 'Connecting';
       break;
     case 'waiting':
-      dotColor = 'bg-warn';
+      dot = 'bg-warn';
       text = 'Waiting for data';
       break;
     case 'live':
-      dotColor = 'bg-accent';
       text = 'Connected';
       break;
     case 'stale': {
-      dotColor = 'bg-warn';
+      dot = 'bg-warn';
       const gapSeconds = lastMessageAt !== null ? Math.round((now - lastMessageAt) / 1000) : 0;
       text = `No data for ${gapSeconds} s`;
       break;
     }
     case 'disconnected':
-      dotColor = 'bg-error';
-      shouldPulse = true;
-      text =
-        retryInS !== null
-          ? `Disconnected, retrying in ${retryInS} s`
-          : 'Disconnected';
+      dot = 'border border-muted';
+      text = retryInS !== null ? `Disconnected, retrying in ${retryInS} s` : 'Disconnected';
       break;
     case 'invalid-url':
-      dotColor = 'bg-error';
+      dot = 'border border-muted';
       text = 'Invalid address';
       break;
   }
 
   return (
     <div className="flex items-center gap-2 font-mono text-xs text-muted">
-      <span
-        className={`w-2 h-2 rounded-full ${dotColor} ${
-          shouldPulse ? 'animate-pulse' : ''
-        }`}
-      />
+      <span className={`w-2 h-2 rounded-full ${dot}`} />
       <span>{text}</span>
     </div>
   );

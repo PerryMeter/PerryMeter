@@ -1,13 +1,27 @@
 import { useEffect, useRef } from 'react';
 import type { AlertLevel, LinkState, NodeState } from '../lib/contract';
 import type { SignalRefValue } from '../hooks/useDetectionStream';
-import type { Mode } from '../lib/settings';
-import { theme } from '../theme';
+import type { Mode, Units } from '../lib/settings';
+import { formatMetres } from '../lib/units';
+import type { Palette } from '../theme';
+import { hexToRgba, readPalette } from '../theme';
+
+/** What was clicked on the map. */
+export type MapTarget =
+  | { kind: 'side'; id: 'left' | 'right' }
+  | { kind: 'front' }
+  | { kind: 'hub' }
+  | { kind: 'node'; id: 'left' | 'right' }
+  | { kind: 'zone' };
 
 export interface ZoneMapProps {
   signalRef: React.RefObject<SignalRefValue>;
   mode: Mode;
   armed: boolean;
+  /** Changes when the theme changes, so the canvas re-reads its colours. */
+  themeKey: string;
+  units: Units;
+  onSelect?: (target: MapTarget) => void;
   className?: string;
 }
 
@@ -16,13 +30,18 @@ interface Point {
   y: number;
 }
 
-function hexToRgba(hex: string, alpha: number): string {
-  const cleanHex = hex.replace('#', '');
-  const r = parseInt(cleanHex.substring(0, 2), 16);
-  const g = parseInt(cleanHex.substring(2, 4), 16);
-  const b = parseInt(cleanHex.substring(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}, ${Math.max(0, Math.min(1, alpha)).toFixed(3)})`;
-}
+type Geometry = {
+  hub: Point;
+  left: Point;
+  right: Point;
+  S: number;
+  pxPerMetre: number;
+};
+
+const FAN_START = Math.PI / 2 - Math.PI / 3; // 30 deg: the radar sees about 120 deg
+const FAN_END = Math.PI / 2 + Math.PI / 3; // 150 deg
+const HEAT_SLICES = 36;
+const HEAT_FADE_S = 1.5;
 
 function getSideMetres(): number {
   if (typeof window === 'undefined') return 3;
@@ -41,7 +60,27 @@ function getSideMetres(): number {
   return 3;
 }
 
+function line(ctx: CanvasRenderingContext2D, p1: Point, p2: Point, color: string, width: number, dash: number[]) {
+  ctx.setLineDash(dash);
+  ctx.lineWidth = width;
+  ctx.strokeStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(p1.x, p1.y);
+  ctx.lineTo(p2.x, p2.y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
 
+function clipTriangle(ctx: CanvasRenderingContext2D, g: Geometry) {
+  ctx.beginPath();
+  ctx.moveTo(g.hub.x, g.hub.y);
+  ctx.lineTo(g.left.x, g.left.y);
+  ctx.lineTo(g.right.x, g.right.y);
+  ctx.closePath();
+  ctx.clip();
+}
+
+/** A side of the triangle: offline or missing node, active (someone at the line), or idle. */
 function drawSide(
   ctx: CanvasRenderingContext2D,
   p1: Point,
@@ -51,137 +90,103 @@ function drawSide(
   nodes: NodeState[] | null,
   armed: boolean,
   alert: AlertLevel,
-  timeSec: number,
-  prefersReducedMotion: boolean,
-  isFresh: boolean
+  pal: Palette,
 ) {
-  ctx.save();
-
-  // 19.1: node states apply only when the server reports nodes. With nodes null
-  // (older servers) the side is drawn exactly as before Phase 13.
   if (nodes !== null) {
     const node = nodes.find((n) => n.id === sideId);
-
-    // Not installed (node missing from nodes): 1.5px dashed faint, dashes 4px on and
-    // 4px off (the same as the bottom side), no glow, ignores links and alert.
     if (!node) {
-      ctx.setLineDash([4, 4]);
-      ctx.lineWidth = 1.5;
-      ctx.strokeStyle = theme.faint;
-      ctx.beginPath();
-      ctx.moveTo(p1.x, p1.y);
-      ctx.lineTo(p2.x, p2.y);
-      ctx.stroke();
-      ctx.restore();
+      line(ctx, p1, p2, pal.faint, 1.5, [4, 4]);
       return;
     }
-
-    // Offline (node reported with online false): 2px dashed error at 70%
     if (!node.online) {
-      ctx.setLineDash([6, 6]);
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = hexToRgba(theme.error, 0.70);
-      ctx.beginPath();
-      ctx.moveTo(p1.x, p1.y);
-      ctx.lineTo(p2.x, p2.y);
-      ctx.stroke();
-      ctx.restore();
+      line(ctx, p1, p2, pal.muted, 2, [6, 6]);
       return;
     }
   }
 
-  // Older servers without links: colour both sides by the overall alert (18.7)
+  // Older servers without links: colour both sides by the overall alert
   if (links === null) {
-    let color: string = theme.accent;
+    let color: string = pal.lineStrong;
     if (armed) {
-      if (alert === 'inside') color = theme.motion;
-      else if (alert === 'approach') color = theme.warn;
+      if (alert === 'inside') color = pal.alert;
+      else if (alert === 'approach') color = pal.warn;
     }
-    ctx.setLineDash([]);
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(p1.x, p1.y);
-    ctx.lineTo(p2.x, p2.y);
-    ctx.stroke();
-    ctx.restore();
+    line(ctx, p1, p2, color, 2, []);
     return;
   }
 
   const link = links.find((l) => l.id === sideId);
-
-  // No link for this side (node online, or no node status): the idle style (2px line-strong), not red.
   if (!link) {
-    ctx.setLineDash([]);
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = theme.lineStrong;
-    ctx.beginPath();
-    ctx.moveTo(p1.x, p1.y);
-    ctx.lineTo(p2.x, p2.y);
-    ctx.stroke();
-    ctx.restore();
+    line(ctx, p1, p2, pal.lineStrong, 2, []);
     return;
   }
 
-  // Armed or disarmed, a side shows its own activity, so you can always see which side it is.
-  // (Disarming only turns off the alarm and the ALERT styling.)
-  // 19.5: Active side colour:
-  // A link with motion: true now means activity at that side, so draw it in warn
-  // instead of motion: 3px warn, with the same glow (shadowBlur 12 to 24 scaled by
-  // the link's strength, reset right after) and the same 1.2 s pulse (none with reduced motion).
   if (link.motion) {
-    if (isFresh) {
-      const pulse = prefersReducedMotion
-        ? 1.0
-        : 0.7 + 0.3 * Math.sin((2 * Math.PI * timeSec) / 1.2);
-      const clampedStrength = Math.min(1, Math.max(0, link.strength));
-      const baseBlur = 12 + 12 * clampedStrength;
-      const blur = Math.round(baseBlur * pulse);
-      ctx.shadowColor = theme.warn;
-      ctx.shadowBlur = blur;
-    }
-    ctx.strokeStyle = theme.warn;
-    ctx.lineWidth = 3;
-    ctx.setLineDash([]);
-    ctx.beginPath();
-    ctx.moveTo(p1.x, p1.y);
-    ctx.lineTo(p2.x, p2.y);
-    ctx.stroke();
-    ctx.restore();
+    // Someone is at this side: 3 px amber, no decoration
+    line(ctx, p1, p2, pal.warn, 3, []);
     return;
   }
 
-  // Idle: 2px line-strong
-  ctx.setLineDash([]);
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = theme.lineStrong;
-  ctx.beginPath();
-  ctx.moveTo(p1.x, p1.y);
-  ctx.lineTo(p2.x, p2.y);
-  ctx.stroke();
-
-  // Rising activity below the threshold: the side warms up in warn as its strength climbs
-  // (the hub sends 0 at the empty-zone baseline and 0.5 at the threshold).
+  line(ctx, p1, p2, pal.lineStrong, 2, []);
+  // Rising activity under the threshold: the side warms up as its strength climbs (the hub sends
+  // 0 at the empty-zone baseline and 0.5 at the threshold)
   const warmth = Math.max(0, Math.min(1, (link.strength - 0.05) / 0.45));
   if (warmth > 0) {
-    ctx.lineWidth = 2 + 0.75 * warmth;
-    ctx.strokeStyle = hexToRgba(theme.warn, 0.15 + 0.65 * warmth);
-    ctx.beginPath();
-    ctx.moveTo(p1.x, p1.y);
-    ctx.lineTo(p2.x, p2.y);
-    ctx.stroke();
+    line(ctx, p1, p2, hexToRgba(pal.warn, 0.15 + 0.65 * warmth), 2 + 0.75 * warmth, []);
   }
-  ctx.restore();
 }
 
-export function ZoneMap({ signalRef, mode, armed, className }: ZoneMapProps) {
+function distanceToSegment(p: Point, a: Point, b: Point): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2));
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+function insideTriangle(p: Point, g: Geometry): boolean {
+  const cross = (a: Point, b: Point) => (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+  const d1 = cross(g.hub, g.left);
+  const d2 = cross(g.left, g.right);
+  const d3 = cross(g.right, g.hub);
+  const hasNeg = d1 < 0 || d2 < 0 || d3 < 0;
+  const hasPos = d1 > 0 || d2 > 0 || d3 > 0;
+  return !(hasNeg && hasPos);
+}
+
+function hitTest(p: Point, g: Geometry): MapTarget | null {
+  if (Math.hypot(p.x - g.hub.x, p.y - g.hub.y) <= 16) return { kind: 'hub' };
+  if (Math.hypot(p.x - g.left.x, p.y - g.left.y) <= 16) return { kind: 'node', id: 'left' };
+  if (Math.hypot(p.x - g.right.x, p.y - g.right.y) <= 16) return { kind: 'node', id: 'right' };
+  if (distanceToSegment(p, g.hub, g.left) <= 10) return { kind: 'side', id: 'left' };
+  if (distanceToSegment(p, g.hub, g.right) <= 10) return { kind: 'side', id: 'right' };
+  if (distanceToSegment(p, g.left, g.right) <= 10) return { kind: 'front' };
+  if (insideTriangle(p, g)) return { kind: 'zone' };
+  return null;
+}
+
+export function ZoneMap({ signalRef, mode, armed, themeKey, units, onSelect, className }: ZoneMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const geometryRef = useRef<Geometry | null>(null);
+  const paletteRef = useRef<Palette>(readPalette());
+  const paletteThemeRef = useRef<string | undefined>(typeof document === 'undefined' ? undefined : document.documentElement.dataset.theme);
+  const unitsRef = useRef<Units>(units);
 
   const armedRef = useRef(armed);
   useEffect(() => {
     armedRef.current = armed;
   }, [armed]);
+
+  useEffect(() => {
+    unitsRef.current = units;
+  }, [units]);
+
+  useEffect(() => {
+    // The CSS variables have changed with the theme; read them again
+    paletteRef.current = readPalette();
+    paletteThemeRef.current = document.documentElement.dataset.theme;
+  }, [themeKey]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -190,14 +195,6 @@ export function ZoneMap({ signalRef, mode, armed, className }: ZoneMapProps) {
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-
-    // Prefers reduced motion detection
-    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
-    let prefersReducedMotion = mediaQuery.matches;
-    const handleMediaChange = (e: MediaQueryListEvent) => {
-      prefersReducedMotion = e.matches;
-    };
-    mediaQuery.addEventListener('change', handleMediaChange);
 
     // Size tracking via ResizeObserver
     const size = { width: 0, height: 0 };
@@ -210,10 +207,7 @@ export function ZoneMap({ signalRef, mode, armed, className }: ZoneMapProps) {
     const style = window.getComputedStyle(container);
     const padX = (parseFloat(style.paddingLeft) || 16) + (parseFloat(style.paddingRight) || 16);
     const padY = (parseFloat(style.paddingTop) || 16) + (parseFloat(style.paddingBottom) || 16);
-    updateSize(
-      Math.max(0, initialRect.width - padX),
-      Math.max(0, initialRect.height - padY)
-    );
+    updateSize(Math.max(0, initialRect.width - padX), Math.max(0, initialRect.height - padY));
 
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
@@ -223,15 +217,13 @@ export function ZoneMap({ signalRef, mode, armed, className }: ZoneMapProps) {
     });
     resizeObserver.observe(canvas);
 
-    // Animation state
+    // Eased display state
     let lastTimestamp = 0;
-    let sweepTime = 0;
-    let displayStrength = 0;
-    let displayDistance = 3.0;
-    let distanceAlpha = 0;
-    // Estimated position: radar distance from the hub, plus a left/right lean from the two Wi-Fi sides
-    let displayLean = 0;
-    let markerAlpha = 0;
+    let displayDistance = 1.5; // metres
+    let displayLean = 0; // -1 left ... +1 right
+    let displayConf = 0.5;
+    let heat = 0; // 0 to 1: the band's presence, fades over HEAT_FADE_S after the target goes
+    let heatColor: 'alert' | 'warn' = 'alert';
     let rafId = 0;
 
     const render = (timestamp: number) => {
@@ -241,7 +233,7 @@ export function ZoneMap({ signalRef, mode, armed, className }: ZoneMapProps) {
         lastTimestamp = timestamp;
       }
       let dt = (timestamp - lastTimestamp) / 1000;
-      dt = Math.max(0, Math.min(dt, 0.05)); // Cap dt at 50 ms
+      dt = Math.max(0, Math.min(dt, 0.05));
       lastTimestamp = timestamp;
 
       const { width, height } = size;
@@ -250,535 +242,254 @@ export function ZoneMap({ signalRef, mode, armed, className }: ZoneMapProps) {
       const dpr = window.devicePixelRatio || 1;
       const targetWidth = Math.round(width * dpr);
       const targetHeight = Math.round(height * dpr);
-
       if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
         canvas.width = targetWidth;
         canvas.height = targetHeight;
       }
-
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, width, height);
 
-      // Read current signals from signalRef
-      const currentSignal = signalRef.current;
-      const strength = currentSignal?.strength ?? 0;
-      const alert: AlertLevel = currentSignal?.alert ?? 'clear';
-      const distanceM = currentSignal?.distanceM ?? null;
-      const isFresh = currentSignal?.isFresh ?? false;
-      const links = currentSignal?.links ?? null;
-      const nodes = currentSignal?.nodes ?? null;
+      // The theme attribute can change between effects; re-read the colours when it does
+      const themeNow = document.documentElement.dataset.theme;
+      if (themeNow !== paletteThemeRef.current) {
+        paletteRef.current = readPalette();
+        paletteThemeRef.current = themeNow;
+      }
+      const pal = paletteRef.current;
+      const s = signalRef.current;
+      const alert: AlertLevel = s?.alert ?? 'clear';
+      const distanceM = s?.distanceM ?? null;
+      const isFresh = s?.isFresh ?? false;
+      const links = s?.links ?? null;
+      const nodes = s?.nodes ?? null;
+      const entrySide = s?.entrySide ?? null;
+      const confidence = s?.confidence ?? 0;
+      const rangeCm = s?.rangeCm ?? null;
       const currentArmed = armedRef.current;
 
-      // Eased strength display: display += (target - display) * (1 - exp(-dt / 0.25))
-      const targetStrength = isFresh ? strength : 0;
-      if (dt > 0) {
-        displayStrength += (targetStrength - displayStrength) * (1 - Math.exp(-dt / 0.25));
-      }
+      // Geometry: the hub near the top, the triangle scaled so the radar range arc also fits
+      const sideMetres = getSideMetres();
+      const rangeRatio = rangeCm !== null ? rangeCm / 100 / sideMetres : 0;
+      const topMargin = 28;
+      const bottomMargin = 30;
+      const needed = Math.max(0.866 + 0.08, rangeRatio + 0.1);
+      const S = Math.max(40, Math.min(0.82 * width, (height - topMargin - bottomMargin) / needed));
+      const triH = S * (Math.sqrt(3) / 2);
+      const cx = width / 2;
+      const hub: Point = { x: cx, y: topMargin };
+      const left: Point = { x: cx - S / 2, y: topMargin + triH };
+      const right: Point = { x: cx + S / 2, y: topMargin + triH };
+      const pxPerMetre = S / sideMetres;
+      const g: Geometry = { hub, left, right, S, pxPerMetre };
+      geometryRef.current = g;
 
-      // Distance easing and fading logic
-      if (isFresh && distanceM !== null) {
-        const targetDist = distanceM;
-        if (distanceAlpha <= 0.01) {
-          displayDistance = targetDist;
-        } else if (dt > 0) {
-          displayDistance += (targetDist - displayDistance) * (1 - Math.exp(-dt / 0.25));
-        }
-        distanceAlpha = Math.min(1, distanceAlpha + dt / 0.3);
+      // Eased values
+      const target = isFresh && distanceM !== null;
+      if (target) {
+        if (heat <= 0.01) displayDistance = distanceM;
+        else if (dt > 0) displayDistance += (distanceM - displayDistance) * (1 - Math.exp(-dt / 0.25));
+        heat = Math.min(1, heat + dt / 0.25);
+        heatColor = alert === 'inside' ? 'alert' : 'warn';
       } else {
-        distanceAlpha = Math.max(0, distanceAlpha - dt / 0.3);
+        heat = Math.max(0, heat - dt / HEAT_FADE_S);
       }
+      if (dt > 0) displayConf += ((target ? confidence : displayConf) - displayConf) * (1 - Math.exp(-dt / 0.4));
 
-      // Lean: which Wi-Fi side is more disturbed (-1 = left, +1 = right). It is an estimate: the
-      // radar gives only distance, and the sides only say how disturbed each link is.
+      // Lean: toward the side whose Wi-Fi level is higher (the radar has no angle)
       const leftStrength = links?.find((l) => l.id === 'left')?.strength ?? 0;
       const rightStrength = links?.find((l) => l.id === 'right')?.strength ?? 0;
-      const leanTarget = Math.max(
-        -1,
-        Math.min(1, (rightStrength - leftStrength) / Math.max(0.2, leftStrength + rightStrength))
-      );
+      const leanTarget = Math.max(-1, Math.min(1, (rightStrength - leftStrength) / Math.max(0.2, leftStrength + rightStrength)));
       const leanCertainty = Math.min(1, (leftStrength + rightStrength) / 0.6);
-      if (dt > 0) {
-        displayLean += (leanTarget - displayLean) * (1 - Math.exp(-dt / 0.4));
-      }
-      // Only for someone inside the zone: nobody is marked outside it
-      const showMarker = isFresh && distanceM !== null && alert === 'inside';
-      markerAlpha = showMarker
-        ? Math.min(1, markerAlpha + dt / 0.3)
-        : Math.max(0, markerAlpha - dt / 0.3);
-      const entrySide = currentSignal?.entrySide ?? null;
+      if (dt > 0) displayLean += (leanTarget - displayLean) * (1 - Math.exp(-dt / 0.5));
 
-      // Geometry:
-      // S = min(0.80 * width, 0.80 * height / 0.866)
-      const S = Math.min(0.80 * width, (0.80 * height) / 0.866);
-      const triH = S * (Math.sqrt(3) / 2);
-
-      const cx = width / 2;
-      const cy = height / 2;
-
-      const hub: Point = { x: cx, y: cy - triH / 2 };
-      const left: Point = { x: cx - S / 2, y: cy + triH / 2 };
-      const right: Point = { x: cx + S / 2, y: cy + triH / 2 };
-
-      const centroidX = cx;
-      const centroidY = hub.y + (2 / 3) * triH;
-
-      const sideMetres = getSideMetres();
-      const pxPerMetre = S / sideMetres;
-
-      const fanStartAngle = Math.PI / 2 - Math.PI / 3; // PI / 6 (30 deg)
-      const fanEndAngle = Math.PI / 2 + Math.PI / 3;   // 5 * PI / 6 (150 deg)
-      const fanRadius = Math.min(6, 1.2 * sideMetres) * pxPerMetre;
-
-      // Sweep period and timing
-      let period = 4.0;
-      if (!isFresh) {
-        period = 8.0;
-      } else {
-        period = 4.0 - 1.6 * displayStrength;
-      }
-
-      if (dt > 0) {
-        sweepTime += dt;
-      }
-
-      const cycleProgress = (sweepTime % period) / period;
-      const isForward = cycleProgress < 0.5;
-      const p = isForward ? cycleProgress / 0.5 : (1 - cycleProgress) / 0.5;
-      const sweepAngle = fanStartAngle + p * (fanEndAngle - fanStartAngle);
-
-      let sweepColor: string = theme.accent;
-      if (currentArmed) {
-        if (alert === 'inside') {
-          sweepColor = theme.motion;
-        } else if (alert === 'approach') {
-          sweepColor = theme.warn;
-        } else {
-          sweepColor = theme.accent;
-        }
-      } else {
-        sweepColor = theme.accent;
-      }
-
-      // Layer 8: Not fresh -> 35% global opacity
       const baseAlpha = isFresh ? 1.0 : 0.35;
       ctx.save();
       ctx.globalAlpha = baseAlpha;
 
-      // 1. Interior: fill the triangle with surface-2.
-      // When data is fresh and armed, tint it: approach with warn at 5%, inside with motion at 10%.
+      // 1. The zone: a flat fill, tinted by the alert while armed
       ctx.beginPath();
       ctx.moveTo(hub.x, hub.y);
       ctx.lineTo(left.x, left.y);
       ctx.lineTo(right.x, right.y);
       ctx.closePath();
-      ctx.fillStyle = theme.surface2;
+      ctx.fillStyle = pal.surface2;
       ctx.fill();
-
       if (isFresh && currentArmed) {
         if (alert === 'approach') {
-          ctx.fillStyle = hexToRgba(theme.warn, 0.05);
+          ctx.fillStyle = hexToRgba(pal.warn, 0.06);
           ctx.fill();
         } else if (alert === 'inside') {
-          ctx.fillStyle = hexToRgba(theme.motion, 0.10);
+          ctx.fillStyle = hexToRgba(pal.alert, 0.08);
           ctx.fill();
         }
       }
 
-      // 2. Radar fan, clipped to the triangle
-      // a fan from the hub with radius min(6, 1.2 * sideMetres) * pxPerMetre, plus faint range arcs every 1 m (1px, line, no labels).
+      // 2. Range arcs every metre inside the zone (scale only)
       ctx.save();
-      ctx.beginPath();
-      ctx.moveTo(hub.x, hub.y);
-      ctx.lineTo(left.x, left.y);
-      ctx.lineTo(right.x, right.y);
-      ctx.closePath();
-      ctx.clip();
-
+      clipTriangle(ctx, g);
       ctx.lineWidth = 1;
-      ctx.strokeStyle = theme.line;
-
-      const maxM = Math.floor(Math.min(6, 1.2 * sideMetres));
+      ctx.strokeStyle = pal.line;
+      const maxM = Math.ceil(sideMetres);
       for (let m = 1; m <= maxM; m++) {
-        const r = m * pxPerMetre;
-        if (r < fanRadius - 0.5) {
-          ctx.beginPath();
-          ctx.arc(hub.x, hub.y, r, fanStartAngle, fanEndAngle);
-          ctx.stroke();
-        }
+        ctx.beginPath();
+        ctx.arc(hub.x, hub.y, m * pxPerMetre, FAN_START, FAN_END);
+        ctx.stroke();
       }
-
-      ctx.beginPath();
-      ctx.arc(hub.x, hub.y, fanRadius, fanStartAngle, fanEndAngle);
-      ctx.stroke();
-
       ctx.restore();
 
-      // 3. Sweep, clipped to the triangle
-      // a line from the hub that swings back and forth across the fan.
-      // Behind the line, a 15 degree wedge fading from 30% at the line to 0, on the side it came from.
-      // Reduced motion: no sweep, only the static fan.
-      if (!prefersReducedMotion) {
+      // 3. The radar's cutoff (MAX_DISTANCE_CM): dotted, across its 120 degree view
+      if (rangeCm !== null) {
+        const r = (rangeCm / 100) * pxPerMetre;
         ctx.save();
+        ctx.setLineDash([2, 4]);
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = pal.faint;
         ctx.beginPath();
-        ctx.moveTo(hub.x, hub.y);
-        ctx.lineTo(left.x, left.y);
-        ctx.lineTo(right.x, right.y);
-        ctx.closePath();
-        ctx.clip();
-
-        const wedgeAngle = Math.PI / 12; // 15 degrees
-        const wedgeSpanFrac = 1 / 24;
-
-        try {
-          if (isForward) {
-            const gradStart = sweepAngle - wedgeAngle;
-            const grad = ctx.createConicGradient(gradStart, hub.x, hub.y);
-            grad.addColorStop(0, hexToRgba(sweepColor, 0));
-            grad.addColorStop(wedgeSpanFrac, hexToRgba(sweepColor, 0.30));
-            grad.addColorStop(wedgeSpanFrac + 0.0001, hexToRgba(sweepColor, 0));
-            grad.addColorStop(1, hexToRgba(sweepColor, 0));
-
-            ctx.beginPath();
-            ctx.moveTo(hub.x, hub.y);
-            ctx.arc(hub.x, hub.y, fanRadius, gradStart, sweepAngle, false);
-            ctx.closePath();
-            ctx.fillStyle = grad;
-            ctx.fill();
-          } else {
-            const grad = ctx.createConicGradient(sweepAngle, hub.x, hub.y);
-            grad.addColorStop(0, hexToRgba(sweepColor, 0.30));
-            grad.addColorStop(wedgeSpanFrac, hexToRgba(sweepColor, 0));
-            grad.addColorStop(wedgeSpanFrac + 0.0001, hexToRgba(sweepColor, 0));
-            grad.addColorStop(1, hexToRgba(sweepColor, 0));
-
-            ctx.beginPath();
-            ctx.moveTo(hub.x, hub.y);
-            ctx.arc(hub.x, hub.y, fanRadius, sweepAngle, sweepAngle + wedgeAngle, false);
-            ctx.closePath();
-            ctx.fillStyle = grad;
-            ctx.fill();
-          }
-        } catch {
-          // Fallback if createConicGradient is unavailable
-          ctx.beginPath();
-          ctx.moveTo(hub.x, hub.y);
-          const wStart = isForward ? sweepAngle - wedgeAngle : sweepAngle;
-          const wEnd = isForward ? sweepAngle : sweepAngle + wedgeAngle;
-          ctx.arc(hub.x, hub.y, fanRadius, wStart, wEnd, false);
-          ctx.closePath();
-          ctx.fillStyle = hexToRgba(sweepColor, 0.15);
-          ctx.fill();
-        }
-
-        // Sweep leading line
-        ctx.beginPath();
-        ctx.moveTo(hub.x, hub.y);
-        ctx.lineTo(
-          hub.x + Math.cos(sweepAngle) * fanRadius,
-          hub.y + Math.sin(sweepAngle) * fanRadius
-        );
-        ctx.strokeStyle = hexToRgba(sweepColor, 0.90);
-        ctx.lineWidth = 1.5;
+        ctx.arc(hub.x, hub.y, r, FAN_START, FAN_END);
         ctx.stroke();
-
+        ctx.setLineDash([]);
+        ctx.font = "10px 'IBM Plex Mono', monospace";
+        ctx.fillStyle = pal.faint;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        ctx.fillText(`RADAR RANGE ${formatMetres(rangeCm / 100, unitsRef.current)}`, cx, hub.y + r + 4);
         ctx.restore();
       }
 
-      // 4. Distance arc, clipped to the triangle
-      // when fresh and distanceM is a number, a dashed warn arc (1.5px, 6px on and 6px off)
-      // centred on the hub, radius distanceM * pxPerMetre, spanning the whole fan.
-      // Its radius eases like the strength, and it fades out over 300 ms when the distance goes away. Never a dot.
-      if (isFresh && distanceAlpha > 0.005) {
+      // 4. Heat band: the radar's distance (a ring around the hub, clipped to the zone), leaning
+      // toward the side whose Wi-Fi level is higher, as strong as the confidence, fading when lost
+      if (heat > 0.01) {
+        const color = heatColor === 'alert' ? pal.alert : pal.warn;
+        const r = displayDistance * pxPerMetre;
+        const halfW = (0.12 + 0.22 * (1 - displayConf)) * pxPerMetre;
+        const thetaC = Math.PI / 2 - displayLean * (Math.PI / 6) * 0.85;
+        const sigma = (Math.PI / 6) * (0.45 + 0.75 * (1 - leanCertainty));
+        const intensity = heat * (0.3 + 0.7 * displayConf);
+        const step = (FAN_END - FAN_START) / HEAT_SLICES;
         ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(hub.x, hub.y);
-        ctx.lineTo(left.x, left.y);
-        ctx.lineTo(right.x, right.y);
-        ctx.closePath();
-        ctx.clip();
-
-        ctx.beginPath();
-        ctx.arc(hub.x, hub.y, displayDistance * pxPerMetre, fanStartAngle, fanEndAngle);
-        ctx.setLineDash([6, 6]);
-        ctx.lineWidth = 1.5;
-        ctx.strokeStyle = hexToRgba(theme.warn, distanceAlpha);
-        ctx.stroke();
-
+        clipTriangle(ctx, g);
+        for (let i = 0; i < HEAT_SLICES; i++) {
+          const a0 = FAN_START + step * i;
+          const a1 = a0 + step + 0.004;
+          const am = a0 + step / 2;
+          const w = Math.exp(-0.5 * ((am - thetaC) / sigma) ** 2);
+          const alpha = intensity * (0.1 + 0.9 * w);
+          for (const [frac, mult] of [
+            [1.0, 0.25],
+            [0.75, 0.5],
+            [0.45, 1.0],
+          ] as const) {
+            const inner = Math.max(0, r - halfW * frac);
+            const outer = r + halfW * frac;
+            ctx.beginPath();
+            ctx.arc(hub.x, hub.y, outer, a0, a1);
+            ctx.arc(hub.x, hub.y, inner, a1, a0, true);
+            ctx.closePath();
+            ctx.fillStyle = hexToRgba(color, alpha * mult);
+            ctx.fill();
+          }
+        }
         ctx.restore();
       }
 
       // 5. Sides
-      const animTime = timestamp / 1000;
-      // Left side: hub to left
-      drawSide(
-        ctx,
-        hub,
-        left,
-        'left',
-        links,
-        nodes,
-        currentArmed,
-        alert,
-        animTime,
-        prefersReducedMotion,
-        isFresh
-      );
+      drawSide(ctx, hub, left, 'left', links, nodes, currentArmed, alert, pal);
+      drawSide(ctx, hub, right, 'right', links, nodes, currentArmed, alert, pal);
 
-      // Right side: hub to right
-      drawSide(
-        ctx,
-        hub,
-        right,
-        'right',
-        links,
-        nodes,
-        currentArmed,
-        alert,
-        animTime,
-        prefersReducedMotion,
-        isFresh
-      );
-
-      // Bottom side: left to right
+      // 6. The front: a Wi-Fi link if the hub reports one, otherwise the radar's side
       const hasBaseLink = Boolean(links?.some((l) => l.id === 'base'));
+      const radarWatches = Boolean(nodes?.some((n) => n.id === 'radar' && n.online));
       if (hasBaseLink) {
-        drawSide(
-          ctx,
-          left,
-          right,
-          'base',
-          links,
-          nodes,
-          currentArmed,
-          alert,
-          animTime,
-          prefersReducedMotion,
-          isFresh
-        );
+        drawSide(ctx, left, right, 'base', links, nodes, currentArmed, alert, pal);
       } else {
-        // No Wi-Fi link on the bottom side: with a radar it is the radar's side (the radar faces it
-        // and sees people come in through it); without one it is unmonitored (expansion kit).
-        const radarWatches = Boolean(nodes?.some((n) => n.id === 'radar' && n.online));
-        ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(left.x, left.y);
-        ctx.lineTo(right.x, right.y);
-        ctx.setLineDash([4, 4]);
-        ctx.lineWidth = 1.5;
-        ctx.strokeStyle = radarWatches ? theme.lineStrong : theme.faint;
-        ctx.stroke();
-
+        line(ctx, left, right, radarWatches ? pal.lineStrong : pal.faint, 1.5, [4, 4]);
         ctx.font = "10px 'IBM Plex Mono', monospace";
-        ctx.fillStyle = radarWatches ? theme.muted : theme.faint;
+        ctx.fillStyle = radarWatches ? pal.muted : pal.faint;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
-        ctx.fillText(radarWatches ? 'RADAR SIDE' : 'EXPANSION', cx, left.y + 6);
-        ctx.restore();
+        ctx.fillText(radarWatches ? 'FRONT: RADAR' : 'FRONT: NOT MONITORED', cx, left.y + 6);
       }
 
-      // 5b. Where the person came in and where they probably are (estimate)
-      if (markerAlpha > 0.01) {
-        const color = alert === 'inside' ? theme.motion : theme.warn;
-        const angle = Math.PI / 2 - displayLean * (Math.PI / 6) * 0.85;
-        const r = displayDistance * pxPerMetre;
-        let px = hub.x + Math.cos(angle) * r;
-        let py = hub.y + Math.sin(angle) * r;
-        // They are inside, so keep the marker inside the triangle: the radar measures a circle
-        // around the hub, which reaches a little past the bottom side.
-        const isInsideTriangle = (x: number, y: number) => {
-          const cross = (a: Point, b: Point) => (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x);
-          const d1 = cross(hub, left);
-          const d2 = cross(left, right);
-          const d3 = cross(right, hub);
-          const hasNeg = d1 < 0 || d2 < 0 || d3 < 0;
-          const hasPos = d1 > 0 || d2 > 0 || d3 > 0;
-          return !(hasNeg && hasPos);
-        };
-        if (!isInsideTriangle(px, py)) {
-          let lo = 0;
-          let hi = 1;
-          for (let k = 0; k < 12; k++) {
-            const mid = (lo + hi) / 2;
-            if (isInsideTriangle(centroidX + (px - centroidX) * mid, centroidY + (py - centroidY) * mid)) lo = mid;
-            else hi = mid;
-          }
-          const t = lo * 0.92;
-          px = centroidX + (px - centroidX) * t;
-          py = centroidY + (py - centroidY) * t;
-        }
-
-        ctx.save();
-        ctx.globalAlpha = baseAlpha * markerAlpha;
-
-        // Entry arrow on the side they came in through, and a dashed line to where they are
-        let entryMid: Point | null = null;
-        if (alert === 'inside' && entrySide !== null) {
-          if (entrySide === 'left') entryMid = { x: (hub.x + left.x) / 2, y: (hub.y + left.y) / 2 };
-          else if (entrySide === 'right') entryMid = { x: (hub.x + right.x) / 2, y: (hub.y + right.y) / 2 };
-          else if (entrySide === 'base') entryMid = { x: cx, y: left.y };
-        }
-        if (entryMid !== null) {
-          const nx0 = centroidX - entryMid.x;
-          const ny0 = centroidY - entryMid.y;
-          const len = Math.max(1, Math.hypot(nx0, ny0));
-          const nx = nx0 / len;
-          const ny = ny0 / len;
-          const size = Math.max(7, S * 0.025);
+      // 7. Entry mark: a chevron on the side the person came in through, pointing inward
+      if (isFresh && alert === 'inside' && entrySide !== null) {
+        let mid: Point | null = null;
+        if (entrySide === 'left') mid = { x: (hub.x + left.x) / 2, y: (hub.y + left.y) / 2 };
+        else if (entrySide === 'right') mid = { x: (hub.x + right.x) / 2, y: (hub.y + right.y) / 2 };
+        else if (entrySide === 'base') mid = { x: cx, y: left.y };
+        if (mid) {
+          const centroid: Point = { x: cx, y: hub.y + (2 / 3) * triH };
+          const len = Math.max(1, Math.hypot(centroid.x - mid.x, centroid.y - mid.y));
+          const nx = (centroid.x - mid.x) / len;
+          const ny = (centroid.y - mid.y) / len;
+          const sz = Math.max(6, S * 0.022);
           ctx.beginPath();
-          ctx.moveTo(entryMid.x - ny * size, entryMid.y + nx * size);
-          ctx.lineTo(entryMid.x + nx * size * 1.2, entryMid.y + ny * size * 1.2);
-          ctx.lineTo(entryMid.x + ny * size, entryMid.y - nx * size);
-          ctx.lineWidth = 2.5;
-          ctx.strokeStyle = theme.warn;
-          ctx.setLineDash([]);
+          ctx.moveTo(mid.x - ny * sz, mid.y + nx * sz);
+          ctx.lineTo(mid.x + nx * sz * 1.2, mid.y + ny * sz * 1.2);
+          ctx.lineTo(mid.x + ny * sz, mid.y - nx * sz);
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = pal.alert;
           ctx.stroke();
-
-          ctx.beginPath();
-          ctx.moveTo(entryMid.x + nx * size * 1.2, entryMid.y + ny * size * 1.2);
-          ctx.lineTo(px, py);
-          ctx.setLineDash([3, 5]);
-          ctx.lineWidth = 1.25;
-          ctx.strokeStyle = hexToRgba(theme.warn, 0.7);
-          ctx.stroke();
-          ctx.setLineDash([]);
         }
-
-        // Soft blob: wider when the left/right lean is uncertain
-        const spread = S * (0.035 + 0.07 * (1 - leanCertainty));
-        const glow = ctx.createRadialGradient(px, py, 0, px, py, spread);
-        glow.addColorStop(0, hexToRgba(color, 0.55));
-        glow.addColorStop(1, hexToRgba(color, 0));
-        ctx.fillStyle = glow;
-        ctx.beginPath();
-        ctx.arc(px, py, spread, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.beginPath();
-        ctx.arc(px, py, Math.max(3.5, S * 0.012), 0, Math.PI * 2);
-        ctx.fillStyle = color;
-        ctx.fill();
-
-        ctx.font = "9px 'IBM Plex Mono', monospace";
-        ctx.fillStyle = hexToRgba(color, 0.85);
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('EST', px + Math.max(6, S * 0.02), py);
-        ctx.restore();
       }
 
-      // 6. Cones: a circle of radius 7 at each corner: fill bg, 2px stroke
-      // 19.1: not installed cone stroke faint, label faint; offline stroke error; online stroke accent
+      // 8. Cones and labels
+      const coneStroke = (id: string): string => {
+        if (nodes === null) return pal.faint;
+        const n = nodes.find((x) => x.id === id);
+        if (!n) return pal.faint;
+        return n.online ? pal.accent : pal.muted;
+      };
+      const coneLabel = (id: string): string => {
+        if (nodes === null) return pal.muted;
+        const n = nodes.find((x) => x.id === id);
+        return n ? pal.muted : pal.faint;
+      };
+      for (const [p, id] of [
+        [hub, 'hub'],
+        [left, 'left'],
+        [right, 'right'],
+      ] as const) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
+        ctx.fillStyle = pal.bg;
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = coneStroke(id);
+        ctx.stroke();
+      }
       const hasRadar = Boolean(nodes?.some((n) => n.id === 'radar'));
-
-      // Hub cone
-      const hubNode = nodes ? nodes.find((n) => n.id === 'hub') : null;
-      let hubStroke: string = theme.faint;
-      if (nodes !== null) {
-        hubStroke = hubNode?.online ? theme.accent : theme.error;
-      }
-      ctx.beginPath();
-      ctx.arc(hub.x, hub.y, 7, 0, Math.PI * 2);
-      ctx.fillStyle = theme.bg;
-      ctx.fill();
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = hubStroke;
-      ctx.stroke();
-
-      // Left cone & label
-      const leftNode = nodes ? nodes.find((n) => n.id === 'left') : null;
-      let leftStroke: string = theme.faint;
-      let leftLabelColor: string = theme.muted;
-      if (nodes !== null) {
-        if (!leftNode) {
-          leftStroke = theme.faint;
-          leftLabelColor = theme.faint;
-        } else if (!leftNode.online) {
-          leftStroke = theme.error;
-          leftLabelColor = theme.muted;
-        } else {
-          leftStroke = theme.accent;
-          leftLabelColor = theme.muted;
-        }
-      }
-      ctx.beginPath();
-      ctx.arc(left.x, left.y, 7, 0, Math.PI * 2);
-      ctx.fillStyle = theme.bg;
-      ctx.fill();
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = leftStroke;
-      ctx.stroke();
-
-      // Right cone & label
-      const rightNode = nodes ? nodes.find((n) => n.id === 'right') : null;
-      let rightStroke: string = theme.faint;
-      let rightLabelColor: string = theme.muted;
-      if (nodes !== null) {
-        if (!rightNode) {
-          rightStroke = theme.faint;
-          rightLabelColor = theme.faint;
-        } else if (!rightNode.online) {
-          rightStroke = theme.error;
-          rightLabelColor = theme.muted;
-        } else {
-          rightStroke = theme.accent;
-          rightLabelColor = theme.muted;
-        }
-      }
-      ctx.beginPath();
-      ctx.arc(right.x, right.y, 7, 0, Math.PI * 2);
-      ctx.fillStyle = theme.bg;
-      ctx.fill();
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = rightStroke;
-      ctx.stroke();
-
-      // Labels
-      ctx.save();
       ctx.font = "10px 'IBM Plex Mono', monospace";
       ctx.textAlign = 'center';
-
-      // Hub label above apex
-      ctx.fillStyle = theme.muted;
+      ctx.fillStyle = coneLabel('hub');
       ctx.textBaseline = 'bottom';
       ctx.fillText(hasRadar ? 'HUB + RADAR' : 'HUB', hub.x, hub.y - 12);
-
-      // Left label below left corner
-      ctx.fillStyle = leftLabelColor;
       ctx.textBaseline = 'top';
+      ctx.fillStyle = coneLabel('left');
       ctx.fillText('LEFT', left.x, left.y + 12);
-
-      // Right label below right corner
-      ctx.fillStyle = rightLabelColor;
-      ctx.textBaseline = 'top';
+      ctx.fillStyle = coneLabel('right');
       ctx.fillText('RIGHT', right.x, right.y + 12);
 
-      ctx.restore();
-
-      // 7. Readout in the top-left corner (out of the way of the position marker):
-      // the radar distance while it sees someone, otherwise NO TARGET; not fresh, NO DATA.
+      // 9. Readout: the radar distance while it sees someone, otherwise NO TARGET; no data when stale
       let valStr = '--';
       let lblStr = 'NO DATA';
-      let valColor: string = theme.faint;
+      let valColor: string = pal.faint;
       if (isFresh && distanceM !== null && alert !== 'clear') {
-        valStr = `${distanceM.toFixed(1)} m`;
+        valStr = formatMetres(distanceM, unitsRef.current);
         lblStr = 'FROM HUB';
-        valColor = alert === 'inside' ? theme.motion : theme.warn;
+        valColor = alert === 'inside' ? pal.alert : pal.warn;
       } else if (isFresh) {
         lblStr = 'NO TARGET';
       }
       const valFontSize = Math.max(14, Math.round(S * 0.055));
-      ctx.save();
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
       ctx.font = `500 ${valFontSize}px 'IBM Plex Mono', monospace`;
       ctx.fillStyle = valColor;
-      ctx.fillText(valStr, 12, 12);
+      ctx.fillText(valStr, 4, 4);
       ctx.font = "400 10px 'IBM Plex Mono', monospace";
-      ctx.fillStyle = theme.muted;
-      ctx.fillText(lblStr, 12, 16 + valFontSize);
-      ctx.restore();
+      ctx.fillStyle = pal.muted;
+      ctx.fillText(lblStr, 4, 8 + valFontSize);
 
-      // Restore outer baseAlpha save
       ctx.restore();
     };
 
@@ -787,9 +498,17 @@ export function ZoneMap({ signalRef, mode, armed, className }: ZoneMapProps) {
     return () => {
       cancelAnimationFrame(rafId);
       resizeObserver.disconnect();
-      mediaQuery.removeEventListener('change', handleMediaChange);
     };
   }, [signalRef]);
+
+  const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const g = geometryRef.current;
+    const canvas = canvasRef.current;
+    if (!g || !canvas || !onSelect) return;
+    const rect = canvas.getBoundingClientRect();
+    const target = hitTest({ x: e.clientX - rect.left, y: e.clientY - rect.top }, g);
+    if (target) onSelect(target);
+  };
 
   return (
     <div
@@ -801,13 +520,14 @@ export function ZoneMap({ signalRef, mode, armed, className }: ZoneMapProps) {
     >
       {mode === 'demo' && (
         <span className="absolute top-3 right-3 font-mono text-[11px] text-warn uppercase tracking-wider select-none pointer-events-none z-10">
-          SIMULATED
+          Simulated
         </span>
       )}
       <canvas
         ref={canvasRef}
-        className="w-full h-full block"
-        aria-label="Zone map display"
+        onClick={handleClick}
+        className={`w-full h-full block ${onSelect ? 'cursor-pointer' : ''}`}
+        aria-label="Zone map. Click a side, the hub, the front line or a corner for details"
       />
     </div>
   );

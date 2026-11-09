@@ -114,6 +114,82 @@ export function saveArmed(armed: boolean): void {
   safeSetStorage(ARMED_STORAGE_KEY, armed ? '1' : '0');
 }
 
+// ---- Dashboard-only settings (Settings panel, saved in localStorage) -------------------------
+
+export type ThemeSetting = 'dark' | 'light' | 'system';
+export type Units = 'metric' | 'imperial';
+
+export type DashboardSettings = {
+  theme: ThemeSetting;
+  units: Units;
+  /** Alarm sound while armed and ALERT. */
+  soundOn: boolean;
+  /** Alarm volume, 0 to 1. */
+  volume: number;
+  showActivity: boolean;
+  showEvents: boolean;
+  showNodes: boolean;
+};
+
+export const DEFAULT_SETTINGS: DashboardSettings = {
+  theme: 'dark',
+  units: 'metric',
+  soundOn: false,
+  volume: 0.5,
+  showActivity: true,
+  showEvents: true,
+  showNodes: true,
+};
+
+const SETTINGS_STORAGE_KEY = 'perrymeter.settings';
+
+/** Saved settings merged over the defaults; ?theme=light|dark|system and ?units=metric|imperial win. */
+export function loadSettings(): DashboardSettings {
+  const result: DashboardSettings = { ...DEFAULT_SETTINGS };
+  try {
+    const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
+    if (raw) {
+      const saved = JSON.parse(raw) as Partial<Record<keyof DashboardSettings, unknown>>;
+      if (saved.theme === 'dark' || saved.theme === 'light' || saved.theme === 'system') result.theme = saved.theme;
+      if (saved.units === 'metric' || saved.units === 'imperial') result.units = saved.units;
+      if (typeof saved.soundOn === 'boolean') result.soundOn = saved.soundOn;
+      if (typeof saved.volume === 'number' && Number.isFinite(saved.volume)) {
+        result.volume = Math.max(0, Math.min(1, saved.volume));
+      }
+      if (typeof saved.showActivity === 'boolean') result.showActivity = saved.showActivity;
+      if (typeof saved.showEvents === 'boolean') result.showEvents = saved.showEvents;
+      if (typeof saved.showNodes === 'boolean') result.showNodes = saved.showNodes;
+    }
+  } catch {
+    // Storage blocked or unreadable: defaults
+  }
+  const queryTheme = getSearchParam('theme');
+  if (queryTheme === 'dark' || queryTheme === 'light' || queryTheme === 'system') result.theme = queryTheme;
+  const queryUnits = getSearchParam('units');
+  if (queryUnits === 'metric' || queryUnits === 'imperial') result.units = queryUnits;
+  return result;
+}
+
+export function saveSettings(settings: DashboardSettings): void {
+  safeSetStorage(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+}
+
+/** 'dark' or 'light' for a theme setting ('system' follows the OS). */
+export function resolveTheme(theme: ThemeSetting): 'dark' | 'light' {
+  if (theme !== 'system') return theme;
+  try {
+    return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  } catch {
+    return 'dark';
+  }
+}
+
+/** Sets data-theme on <html> right away, so components reading the CSS variables see the new colours. */
+export function applyThemeAttribute(theme: 'dark' | 'light'): void {
+  if (typeof document === 'undefined') return;
+  document.documentElement.dataset.theme = theme;
+}
+
 const SENSORS_STORAGE_KEY = 'perrymeter.sensors';
 
 /** Sensors panel open: ?sensors=1 or 0 wins, then the saved choice, default closed. */

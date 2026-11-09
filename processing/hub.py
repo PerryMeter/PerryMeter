@@ -44,6 +44,19 @@ What the dashboard gets
 If no sensor data arrives for STALE_S, the hub sends nothing, so the dashboard shows that the data
 stopped instead of a false CLEAR.
 
+Commands the dashboard sends over the WebSocket (one JSON object each):
+    {"type": "calibrate"}                               see Calibration below
+    {"type": "cancel_calibration"}
+    {"type": "swap_sides"}                              rename which board is "left"
+    {"type": "adjust_threshold", "side": "left", "factor": 1.25}
+    {"type": "set_threshold", "side": "left", "value": 0.12}     a side's threshold, absolute
+    {"type": "reset_threshold", "side": "left"}                  back to the calibrated value
+    {"type": "set_radar_thresholds", "moving": 20, "still": 20}  either or both, 5 to 100
+    {"type": "reset_radar_thresholds"}                           back to the calibrated values
+    {"type": "set_range", "max_cm": 220}                         radar cutoff, 100 to 600 cm
+The last five only move numbers the existing rules read (see DEFAULT_MAX_DISTANCE_CM); the
+decision code is untouched and, untouched, they leave everything as it was.
+
 Calibration ("calibrate" command from the dashboard, or --calibrate-on-start): after a countdown
 to leave the area, the hub measures the empty zone and sets
     each Wi-Fi side's baseline    the median of its empty score (strength is 0 there)
@@ -70,6 +83,7 @@ import collections
 import csv
 import datetime
 import json
+import math
 import os
 import random
 import sys
@@ -209,6 +223,13 @@ BLOCK_FLOOR = 0.02
 RADAR_THRESHOLD_REFUSE = 70   # a calibrated radar threshold this high means someone was in view (a quiet empty room gives about 20-50)
 SIDE_BY_MAC = {"1a:00:00:00:00:02": "left", "1a:00:00:00:00:03": "right"}
 HUB_CALIBRATION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hub_calibration.json")
+# Manual settings from the dashboard's Settings panel (set_threshold, set_radar_thresholds, set_range).
+# None of them changes how the hub decides: they only move the numbers the existing rules already
+# read, and they are saved like a calibration. Untouched, everything stays exactly as before.
+DEFAULT_MAX_DISTANCE_CM = rs.MAX_DISTANCE_CM   # 220 in radar_settings.py
+RANGE_CM_LIMITS = (100, 600)                   # the LD2410C sees to about 6 m
+LINK_THRESHOLD_LIMITS = (CALIBRATION_FLOOR, 2.0)
+RADAR_THRESHOLD_LIMITS = (5, 100)
 STATES = {0: "nobody", 1: "moving", 2: "still", 3: "moving+still"}
 
 
@@ -277,6 +298,7 @@ class Link:
         self.baseline = DEFAULT_LINK_BASELINE
         self.calibrated = False
         self.calibrated_at = None
+        self.calibrated_threshold = None   # what the last calibration set, for "reset to calibrated"
         self.score = None
         # "line blocked": empty-zone pattern (per subcarrier) and which subcarriers it uses
         self.base_shape = None
@@ -839,6 +861,9 @@ class Calibrator:
         self.message = "Not calibrated in this session"
         self.results = None
         self.at = None
+        # The radar thresholds the last calibration set (loaded from radar_calibration.json at start),
+        # for "reset to calibrated" after a manual change
+        self.radar_calibrated = (rs.MOVING_THRESHOLD, rs.STILL_THRESHOLD)
 
     def start(self, now, countdown_s, measure_s):
         self.state, self.until, self.measure_s = "countdown", now + countdown_s, measure_s
@@ -886,6 +911,7 @@ class Calibrator:
             link.baseline = round(float(np.median(vals)), 4)
             link.threshold = round(max(CALIBRATION_FLOOR, CALIBRATION_MARGIN * p99, 2 * link.baseline), 4)
             link.calibrated, link.calibrated_at = True, now_text()
+            link.calibrated_threshold = link.threshold
             link.reset_follow()
             results["links"][side] = {"mac": link.mac, "threshold": link.threshold,
                                       "empty_median": link.baseline,
@@ -927,6 +953,7 @@ class Calibrator:
             else:
                 rs.MOVING_THRESHOLD, rs.STILL_THRESHOLD = mt, st
                 rs.THRESHOLD_SOURCE = f"hub calibration at {now_text()}"
+                self.radar_calibrated = (mt, st)
                 results["radar"]["applied"] = True
                 save_radar_calibration(mt, st, pm, ps, len(self.radar_m))
         else:
@@ -960,7 +987,8 @@ def apply_sides(links, side_by_mac):
 
 
 def link_calibration(l):
-    entry = {"side": l.side, "calibrated": l.calibrated, "threshold": l.threshold, "baseline": l.baseline}
+    entry = {"side": l.side, "calibrated": l.calibrated, "threshold": l.threshold, "baseline": l.baseline,
+             "calibrated_threshold": l.calibrated_threshold}
     if l.base_shape is not None:
         entry.update({
             "block_threshold": l.block_threshold, "block_baseline": l.block_baseline,
@@ -971,7 +999,7 @@ def link_calibration(l):
 
 
 def save_hub_calibration(links):
-    data = {"created": now_text(), "margin": CALIBRATION_MARGIN,
+    data = {"created": now_text(), "margin": CALIBRATION_MARGIN, "max_distance_cm": rs.MAX_DISTANCE_CM,
             "links": {l.mac: link_calibration(l) for l in links.values() if l.calibrated}}
     with open(HUB_CALIBRATION_FILE, "w") as f:
         json.dump(data, f)
@@ -979,7 +1007,7 @@ def save_hub_calibration(links):
 
 def save_hub_calibration_all(links):
     """Save every side's current thresholds (after a manual change), calibrated or not."""
-    data = {"created": now_text(), "margin": CALIBRATION_MARGIN,
+    data = {"created": now_text(), "margin": CALIBRATION_MARGIN, "max_distance_cm": rs.MAX_DISTANCE_CM,
             "links": {l.mac: link_calibration(l) for l in links.values()}}
     with open(HUB_CALIBRATION_FILE, "w") as f:
         json.dump(data, f)
@@ -992,6 +1020,10 @@ def load_hub_calibration(links):
         with open(HUB_CALIBRATION_FILE) as f:
             data = json.load(f)
         apply_sides(links, {mac: e.get("side") for mac, e in data.get("links", {}).items()})
+        # A radar range set from the dashboard (set_range); absent or default: nothing changes
+        saved_range = data.get("max_distance_cm")
+        if isinstance(saved_range, (int, float)) and RANGE_CM_LIMITS[0] <= saved_range <= RANGE_CM_LIMITS[1]:
+            rs.MAX_DISTANCE_CM = int(round(saved_range))
         for link in links.values():
             entry = data.get("links", {}).get(link.mac)
             if entry:
@@ -999,6 +1031,11 @@ def load_hub_calibration(links):
                 link.calibrated = bool(entry.get("calibrated", True))
                 link.baseline = float(entry.get("baseline", DEFAULT_LINK_BASELINE))
                 link.calibrated_at = data.get("created")
+                saved_cal = entry.get("calibrated_threshold")
+                if isinstance(saved_cal, (int, float)):
+                    link.calibrated_threshold = float(saved_cal)
+                elif link.calibrated:
+                    link.calibrated_threshold = link.threshold   # older file: the best we have
                 if entry.get("base_shape") and entry.get("block_threshold"):
                     shape = np.array([np.nan if v is None else v for v in entry["base_shape"]], dtype=float)
                     mask = np.zeros(shape.size, dtype=bool)
@@ -1013,11 +1050,13 @@ def load_hub_calibration(links):
         return None
 
 
-def save_radar_calibration(mt, st, pm, ps, n):
+def save_radar_calibration(mt, st, pm, ps, n, manual=False):
+    """Write radar_calibration.json. pm/ps are None for a manual setting (no empty-room measurement)."""
     data = {"moving_threshold": mt, "still_threshold": st, "created": now_text(),
-            "readings": n, "empty_room_movement_p99": round(pm, 1), "empty_room_stillness_p99": round(ps, 1),
+            "readings": n, "empty_room_movement_p99": None if pm is None else round(pm, 1),
+            "empty_room_stillness_p99": None if ps is None else round(ps, 1),
             "margin": 10, "floor": 20, "distance_range_cm": [rs.MIN_DISTANCE_CM, rs.MAX_DISTANCE_CM],
-            "source": "processing/hub.py"}
+            "source": "processing/hub.py (manual setting)" if manual else "processing/hub.py"}
     with open(rs.CALIBRATION_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
@@ -1090,6 +1129,53 @@ async def run(args):
                         save_hub_calibration_all(links)
                     print(f"threshold: {side} set to {link.threshold} (line blocked {link.block_threshold})",
                           flush=True)
+            elif cmd.get("type") == "set_threshold":
+                # {"type": "set_threshold", "side": "left", "value": 0.12}: one side's threshold, as a
+                # number (the Settings panel's slider). Same floor as adjust_threshold.
+                side, value = cmd.get("side"), cmd.get("value")
+                if side in links and isinstance(value, (int, float)) and math.isfinite(value):
+                    lo, hi = LINK_THRESHOLD_LIMITS
+                    with links_lock:
+                        link = links[side]
+                        link.threshold = round(min(hi, max(lo, link.baseline * 1.2, float(value))), 4)
+                        save_hub_calibration_all(links)
+                    print(f"threshold: {side} set to {link.threshold}", flush=True)
+            elif cmd.get("type") == "reset_threshold":
+                # {"type": "reset_threshold", "side": "left"}: back to what the last calibration set
+                side = cmd.get("side")
+                if side in links and links[side].calibrated_threshold is not None:
+                    with links_lock:
+                        links[side].threshold = links[side].calibrated_threshold
+                        save_hub_calibration_all(links)
+                    print(f"threshold: {side} reset to {links[side].threshold}", flush=True)
+            elif cmd.get("type") == "set_radar_thresholds":
+                # {"type": "set_radar_thresholds", "moving": 20, "still": 20}: either or both, 5 to 100
+                lo, hi = RADAR_THRESHOLD_LIMITS
+                changed = False
+                for key, attr in (("moving", "MOVING_THRESHOLD"), ("still", "STILL_THRESHOLD")):
+                    v = cmd.get(key)
+                    if isinstance(v, (int, float)) and math.isfinite(v):
+                        setattr(rs, attr, int(round(min(hi, max(lo, v)))))
+                        changed = True
+                if changed:
+                    rs.THRESHOLD_SOURCE = f"manual setting at {now_text()}"
+                    save_radar_calibration(rs.MOVING_THRESHOLD, rs.STILL_THRESHOLD, None, None, 0, manual=True)
+                    print(f"radar thresholds set to {rs.MOVING_THRESHOLD}/{rs.STILL_THRESHOLD}", flush=True)
+            elif cmd.get("type") == "reset_radar_thresholds":
+                rs.MOVING_THRESHOLD, rs.STILL_THRESHOLD = calibrator.radar_calibrated
+                rs.THRESHOLD_SOURCE = f"calibrated values, restored at {now_text()}"
+                save_radar_calibration(rs.MOVING_THRESHOLD, rs.STILL_THRESHOLD, None, None, 0)
+                print(f"radar thresholds reset to {rs.MOVING_THRESHOLD}/{rs.STILL_THRESHOLD}", flush=True)
+            elif cmd.get("type") == "set_range":
+                # {"type": "set_range", "max_cm": 220}: the radar cutoff (MAX_DISTANCE_CM). The front-line
+                # limits are fractions of it, so they follow. Missing max_cm: back to the default.
+                v = cmd.get("max_cm", DEFAULT_MAX_DISTANCE_CM)
+                if isinstance(v, (int, float)) and math.isfinite(v):
+                    lo, hi = RANGE_CM_LIMITS
+                    rs.MAX_DISTANCE_CM = int(round(min(hi, max(lo, v))))
+                    with links_lock:
+                        save_hub_calibration_all(links)
+                    print(f"range: radar counts targets up to {rs.MAX_DISTANCE_CM} cm", flush=True)
 
     async with serve(handler, args.host, args.port) as server:
         print(f"Perrymeter hub on ws://{args.host}:{args.port} (Ctrl+C to stop)", flush=True)
@@ -1177,7 +1263,8 @@ async def run(args):
                                    "block": None if info[7] is None else round(info[7], 4),
                                    "block_threshold": info[8],
                                    "calibrated": info[3], "motion": info[4],
-                                   "evidence": round(info[10], 3), "follow_scale": info[11]}
+                                   "evidence": round(info[10], 3), "follow_scale": info[11],
+                                   "calibrated_threshold": links[s].calibrated_threshold}
                                   for s, info in link_info.items()],
                         "radar": None if not radar_fresh else {
                             "fps": radar_fps, "state": frame[0], "state_name": STATES.get(frame[0], str(frame[0])),
@@ -1194,6 +1281,22 @@ async def run(args):
                         "zone": {"state": gate.state, "entry_side": gate.entry_side,
                                  "entry_logic": gate.enabled, "exit_on_crossing": gate.exit_on_crossing,
                                  "blocked_sides": sorted(gate.blocked)},
+                        # The numbers the Settings panel shows and adjusts (see set_range and friends)
+                        "settings": {
+                            "baud": args.baud, "baud_fixed": True,
+                            "max_distance_cm": rs.MAX_DISTANCE_CM,
+                            "default_max_distance_cm": DEFAULT_MAX_DISTANCE_CM,
+                            "range_limits_cm": list(RANGE_CM_LIMITS),
+                            "still_max_cm": round(STILL_MAX_FRACTION * rs.MAX_DISTANCE_CM),
+                            "moving_max_cm": round(MOVING_MAX_FRACTION * rs.MAX_DISTANCE_CM),
+                            "far_entry_cm": round(FAR_ENTRY_FRACTION * rs.MAX_DISTANCE_CM),
+                            "moving_threshold": rs.MOVING_THRESHOLD, "still_threshold": rs.STILL_THRESHOLD,
+                            "calibrated_moving_threshold": calibrator.radar_calibrated[0],
+                            "calibrated_still_threshold": calibrator.radar_calibrated[1],
+                            "threshold_source": rs.THRESHOLD_SOURCE,
+                            "radar_threshold_limits": list(RADAR_THRESHOLD_LIMITS),
+                            "link_threshold_limits": list(LINK_THRESHOLD_LIMITS),
+                        },
                     },
                 }
                 if links:
