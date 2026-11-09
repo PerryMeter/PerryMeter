@@ -1,102 +1,175 @@
-# processing/ (Step 3: Signal Processing & Detection)
 
-Turns raw CSI into movement detections. This is the hardest and most important step (Team A).
+# Processing and Detection
 
-- **Inputs:** CSI from a capture file in `data/` (offline) or a live stream from `collection/`.
-- **Outputs:** detection messages published over WebSocket, as defined in [`../docs/detection-contract.md`](../docs/detection-contract.md).
+This folder contains PerryMeter's signal-processing tools and the backend that sends live sensor updates to the web dashboard.
 
-## Likely pipeline
+**For the integrated demonstration, use `hub.py`.** It combines data from the two ESP32 Wi-Fi CSI links and the LD2410C radar. The older `detect_motion.py` and `server.py` scripts are retained as CSI-only analysis and testing tools.
 
-1. Parse I/Q into per-subcarrier amplitude (and phase if useful).
-2. Clean: drop bad subcarriers, smooth/filter (moving average, Hampel, low-pass).
-3. Feature: variance or change over a sliding window against an empty-room baseline.
-4. Decide: threshold with hysteresis into `detected` + `confidence`.
-5. Stretch: direction/position from multiple RX boards.
+## System overview
 
-Label captures (empty room, person walking, through wall) so thresholds can be tuned offline and replayed.
-
-## Current detector
-
-- `csi_io.py`: parses `CSI_DATA` lines, link stats (rate, loss from sequence numbers, RSSI), subcarrier amplitudes, Hampel filter, and the motion score.
-- `detect_motion.py`: command-line tool for offline scoring, threshold calibration, and live JSON output.
-
-The motion score is a **motion-to-noise ratio (MNR)**. Each 2 s window is split into 0.2 s bins. Fast scatter inside a bin is treated as noise, and slow drift between bins as movement. The score is the drift beyond what noise explains, divided by the noise, with the median taken over subcarriers. An empty room scores about 0 whatever the signal strength. Plain variance does not have that property: weak links look "busy" even when nothing moves.
-
-```bash
-pip install -r processing/requirements.txt
-python processing/detect_motion.py data/*.csv                              # summary per file
-python processing/detect_motion.py --calibrate data/empty.csv data/walk.csv # suggest a threshold
-python processing/detect_motion.py data/walk.csv --json                     # contract messages
-python processing/detect_motion.py --live COM6                              # live JSON lines
+```text
+ESP2 (Wi-Fi sender) ----\
+                         >---- ESP1 (CSI receiver + LD2410C radar)
+ESP3 (Wi-Fi sender) ----/                    |
+                                             | USB serial
+                                             v
+                                    Raspberry Pi / computer
+                                      processing/hub.py
+                                             |
+                                             | WebSocket (port 8765)
+                                             v
+                                       Web dashboard
 ```
 
-On the 2026-11-06 floor recordings, a threshold of 0.33 classified held-out windows as 100% empty / 98% walking. A person standing still in the link also scores above the threshold, so for now this detects "a person is there and moving at least a little". It needs about **15–20 pkt/s**; below about 10 pkt/s most windows can't be scored. Recalibrate whenever the boards move.
+- **Wi-Fi CSI:** ESP1 receives measurements from ESP2 and ESP3 and evaluates activity near each of the two monitored wireless links.
+- **Radar:** The LD2410C provides detection in the monitored area, including stationary presence.
+- **Sensor fusion:** `hub.py` combines these readings to report the zone state and an inferred entry side where the available evidence permits.
 
-## Processing server (`server.py`)
+Wi-Fi link activity is **not by itself proof that someone crossed a boundary**: movement close to a link can also disturb its signal. The hub includes logic to interpret entry and exit events using both Wi-Fi activity and radar readings.
 
-Feeds the dashboard. It reads CSI from a recording or the receiver's serial port, runs the detector above on a sliding 2 s window, and broadcasts the message from [`../docs/detection-contract.md`](../docs/detection-contract.md) on `ws://0.0.0.0:8765` 10 times a second, to any number of dashboards.
+## Requirements
 
-```bash
-pip install -r processing/requirements.txt
-
-# replay a recording at its original speed (globs work, also in PowerShell)
-python processing/server.py --csi data/walking_between_*.csv
-
-# empty, then walking, forever: clear -> ALERT -> clear on the dashboard
-python processing/server.py --csi data/no_movement_*.csv data/walking_between_*.csv --loop
-
-# live from the receiver ESP32 (close idf.py monitor first)
-python processing/server.py --csi COM5
-```
-
-Then open the dashboard with `?mode=live` (from another device: `?mode=live&ws=ws://<this-pc-ip>:8765`).
-
-- **Source:** if `--csi` matches files they are replayed in order, paced by each row's `t` column; otherwise it is opened as a serial port at `--baud` (921600), and reopened every 2 s if the board is unplugged. Lines that are not `CSI_DATA` (boot messages) are skipped.
-- **Detector:** Team A's `window_score` and `Hysteresis`, unchanged. `--threshold` (0.33) is the only calibration. `--hold` (0.5 s) is how long the score must stay past the threshold before `motion` flips.
-- **Alert:** `inside` while `motion`, and for `--clear-after` (3 s) after it stops; otherwise `clear`. `distance_m` is `null` until the radar is added (project.md section 10).
-- **Extra field:** `mnr`, the raw score, for debugging. The dashboard ignores it.
-- **No data:** if no packet arrives for 1 s (replay finished, board unplugged), the server sends nothing, so the dashboard shows that data stopped instead of freezing.
-- **Status line** once per second: source, packets/s, RSSI, score, alert, connected clients.
-
-Test on 2026-11-07, replaying `no_movement` → `walking_between` → `no_movement`: 10.0 messages/s, 0 invalid, ALERT about 2 s into `walking_between`, back to clear about 4 s after it ended. The first 5 s of `no_movement` also raise a short false alarm. That comes from the recording, not the server: the summary above flags 8% of that file as movement.
-
-## Hub server (`hub.py`)
-
-The server for the demo. It sends the dashboard message on `ws://0.0.0.0:8765` about 10 times a second.
+Run these commands from the **repository root**. Install the Python dependencies required by `hub.py`:
 
 ```bash
-pip install pyserial websockets numpy
-python processing/hub.py --esp1 COM6                     # ESP1: both Wi-Fi sides + the radar on one port (firmware/csi/csi_recv_esp1)
-python processing/hub.py --radar COM5                    # the radar alone, through the Feather bridge
-python processing/hub.py --fake-radar                    # simulated radar, no hardware
-python processing/hub.py --esp1 COM6 --record-csi csi.csv --record radar.csv   # also save the raw data
+python -m pip install pyserial websockets numpy
 ```
 
-Then open the dashboard with `?mode=live&sensors=1`. The **Sensors** panel (button next to the endpoint) shows each Wi-Fi side's packets/s, RSSI and activity against its threshold, the radar's distances and energies against its thresholds, ESP1's line rate, and the raw message. Its **Calibrate empty zone** button makes the hub wait 5 s (leave the zone), measure the empty zone for 15 s, and set:
+The hub also imports `radar_settings.py` and `radar_server.py` from the repository root. Keep those files in place.
 
-- each Wi-Fi side's threshold to 1.5 x the 99th percentile of its empty activity (and its baseline to the median), saved in `processing/hub_calibration.json`;
-- the radar thresholds by Omar's method (99th percentile + 10, at least 20), saved in `radar_calibration.json`, which `radar_plot.py` and `radar_server.py` also use. A radar threshold of 70 or more means someone was in range while measuring, so it is not applied or saved.
+For a hardware run, connect ESP1 to the machine running the backend. ESP1 must be running the combined receiver firmware (`firmware/csi/csi_recv_esp1`) so that its serial output includes both CSI and radar data.
 
-Neither file is committed: each room needs its own. Without `radar_calibration.json` the radar uses the fixed thresholds in `radar_settings.py` until the first calibration.
+## Run the integrated demo
 
-The panel also has **Threshold - / +** per side (25% steps, saved) and **Swap left/right** (which board is called left, saved).
+### Option 1: ESP1 with Wi-Fi CSI and radar (full hardware setup)
 
-With `--esp1`, Wi-Fi sides start as `left` = ESP2 (`...:02`) and `right` = ESP3 (`...:03`). A side's `motion` means someone is at that side (it cannot tell crossing from walking past). Its activity score: per 1 s window, each packet's amplitudes are divided by that packet's median, and the score is the median over usable subcarriers of how much each one varies. Anyone the radar sees within `MAX_DISTANCE_CM` (220) is ALERT; the experimental `--entry-logic` also requires an entry through a side. If ESP1 sends nothing for 5 s (opening the port can leave it stuck), the hub restarts it through RTS.
+```bash
+python processing/hub.py --esp1 COM6
+```
 
-**On the Raspberry Pi 7" screen (1024x600)** use the kiosk layout: `?mode=live&kiosk=1&side=2`. It has no buttons, so calibrate from another device's browser (`http://<pi-address>:8080/?mode=live&ws=ws://<pi-address>:8765&sensors=1&side=2`).
+Replace `COM6` with ESP1's actual serial port. On Raspberry Pi/Linux this will typically be a `/dev/tty...` device; the exact name depends on the connected hardware.
 
-- **Rule:** Omar's, from `radar_settings.py` at the repo root (thresholds from `radar_calibration.json` when it exists, 0 to 150 cm, 1 s average), so the hub, `radar_plot.py` and `radar_server.py` always agree. Run `radar_calibrate.py` after moving the radar.
-- **Alert:** `inside` while the radar sees a person in the zone, **moving or still**, and for 1.5 s after it loses them (the radar flickers). `approach` when a Wi-Fi side is active, or the radar sees someone beyond the zone (up to `--approach-cm`, 600). Otherwise `clear`.
-- **Motion:** true while a side is active or the radar sees a moving person, so the dashboard shows `not moving` for someone standing still inside.
-- **Nodes:** `hub`, the Wi-Fi sides (with `--esp1`) and `radar`, each online while its data arrives. Without `--esp1` there are no `links`, so the dashboard draws the Wi-Fi sides as not installed.
-- **No data:** if the radar sends nothing for 1 s, the hub sends nothing, so the dashboard shows that data stopped instead of a false CLEAR.
-- **Extra field:** `debug` (per-side packets/s, RSSI, score and threshold; radar raw frame, averaged energies, thresholds and prediction; ESP1 line rate; calibration state) for the Sensors panel. The main dashboard ignores it.
-- **Commands:** the hub reads `{"type": "calibrate"}` (optional `countdown_s`, `seconds`) and `{"type": "cancel_calibration"}` from any dashboard.
+This mode reads CSI from both Wi-Fi links and radar frames through **one ESP1 USB serial connection**.
 
-Test on 2026-11-07 with `--fake-radar`: clear, then inside while walking, still inside with `motion` false while standing, approach for someone beyond the zone, then clear; 0 contract problems. With the real radar on COM5: inside, moving and still, at 0.45 to 1.5 m, about 9 messages/s, and the dashboard showed ALERT, `not moving` and the distance arc with 0 invalid messages.
+### Option 2: Radar only (Feather bridge)
 
-## Suggested tooling
+```bash
+python processing/hub.py --radar COM5
+```
 
-- Python 3.10+, `numpy`, `scipy`, `pandas`, `matplotlib`/Jupyter for exploration
-- `scikit-learn` if a simple classifier beats thresholds
-- `websockets` (or FastAPI) for the publisher
+This uses a separate radar bridge and does not provide Wi-Fi side monitoring. Replace `COM5` with the appropriate serial port.
+
+### Option 3: Simulated radar (no sensor hardware)
+
+```bash
+python processing/hub.py --fake-radar
+```
+
+This generates a repeating sequence of simulated radar states for dashboard testing. It is **not** a substitute for demonstrating the full two-link system.
+
+The hub listens for WebSocket connections on port **8765** by default and publishes updates at a configured rate of **10 messages per second**.
+
+## Connect the dashboard
+
+Start the web frontend from the repository root:
+
+```bash
+cd frontend/web
+npm install
+npm run dev
+```
+
+Open the URL shown by Vite and add `?mode=live&sensors=1` to enable the live dashboard and Sensors panel.
+
+If the frontend is on a different device from the backend, set its WebSocket address using the `ws` query parameter, for example:
+
+```text
+?mode=live&ws=ws://<BACKEND_IP>:8765&sensors=1
+```
+
+Use the backend machine's real IP address in place of `<BACKEND_IP>`. Keep the backend and dashboard on a network that permits the connection. The WebSocket service is intended for the demo's trusted local network, not direct public exposure.
+
+## Detection states
+
+The hub publishes three alert states:
+
+| State | Meaning |
+| --- | --- |
+| `clear` | No current detection meeting the configured rules. |
+| `approach` | Activity at a monitored Wi-Fi side, or radar activity beyond the configured zone **if** the optional extended approach range is enabled. |
+| `inside` | The radar detects someone within the configured area, subject to the hub's tracking and exit logic. This can include someone standing still. |
+
+With the standard settings, the radar can initiate an `inside` alert without requiring a prior Wi-Fi crossing. **`--entry-logic` is experimental and disabled by default**; when enabled with ESP1, it requires additional evidence of entry.
+
+The hub can report `entry_side` as `left`, `right`, or `base` (the radar/front side). This is an inference from available sensor readings, not a guaranteed physical location measurement.
+
+### Other dashboard data
+
+The WebSocket messages include fields such as:
+
+- `motion`: whether Wi-Fi side activity or radar movement is detected; a stationary person can still produce `inside` with `motion: false`.
+- `strength` and `confidence`: normalized indicators calculated by the backend, **not validated accuracy percentages**.
+- `distance_m`: radar-estimated target distance, when available.
+- `links` and `nodes`: per-side activity and sensor availability.
+- `debug`: detailed sensor measurements, thresholds, and calibration state for the Sensors panel.
+
+The message format is also described in [`../docs/detection-contract.md`](../docs/detection-contract.md). Check that contract against the current backend when changing message fields.
+
+## Calibration and settings
+
+Use the dashboard's **Sensors** panel to calibrate after positioning the hardware:
+
+1. Make sure the monitored area is empty.
+2. Select **Calibrate empty zone**.
+3. The default countdown provides **5 seconds** to leave the area.
+4. The hub then measures the empty area for **15 seconds** and computes Wi-Fi baselines/thresholds and radar energy thresholds.
+
+Calibration results are saved locally to:
+
+- `processing/hub_calibration.json` — Wi-Fi side thresholds, baselines, and saved configuration.
+- `radar_calibration.json` — radar thresholds shared with the other radar tools.
+
+These are **environment-specific generated settings**. Do not remove them from a working demo machine without planning to recalibrate. They generally should not be committed as universal defaults.
+
+The dashboard can also send commands to swap the left/right side labels, adjust or reset Wi-Fi thresholds, change radar thresholds, and adjust the radar's monitored range. `hub.py` supports these commands; they change configuration values used by the detection rules.
+
+The Wi-Fi detector also adapts its baseline to recent quiet readings while the radar detects no one. Recalibration is still advisable if the setup or environment changes substantially.
+
+## Useful options
+
+```bash
+# Calibrate automatically after starting the hardware hub
+python processing/hub.py --esp1 COM6 --calibrate-on-start
+
+# Save radar frames and raw CSI samples
+python processing/hub.py --esp1 COM6 --record radar.csv --record-csi csi.csv
+
+# Enable experimental entry gating (not on by default)
+python processing/hub.py --esp1 COM6 --entry-logic
+
+# Prevent crossing evidence from clearing an existing radar alert
+python processing/hub.py --esp1 COM6 --no-exit-on-crossing
+```
+
+`--approach-cm` can optionally extend radar-based `approach` detection beyond the normal zone. `--line-blocked` enables a separate experimental Wi-Fi feature and is **off by default**. Run `python processing/hub.py --help` for the complete list of arguments.
+
+## Earlier CSI-only tools
+
+These scripts remain available for development and debugging, but they are **not the integrated demo server**:
+
+| File | Purpose |
+| --- | --- |
+| `csi_io.py` | Parse and process captured CSI data. |
+| `detect_motion.py` | Offline or live CSI-only motion analysis and threshold experiments. |
+| `server.py` | Earlier CSI-only WebSocket server, including replay of recorded captures. |
+
+For the full ESP32 + radar demonstration, run **`hub.py`**, not `server.py`.
+
+## Limitations
+
+- Wi-Fi side activity can occur when someone moves **near** a monitored link, not only when someone physically crosses it.
+- Radar coverage and the inferred zone boundary depend on sensor orientation, placement, range, and calibration.
+- Entry-side labels and exit decisions are inferences; this is not precise localization or a certified safety system.
+- Detection performance and false-alert rates may change in a different environment.
+
+PerryMeter is a **hackathon prototype** intended as an additional safety-monitoring layer, not a replacement for workplace barriers, procedures, or certified safety equipment.
