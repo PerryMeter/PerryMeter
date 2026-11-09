@@ -233,6 +233,8 @@ export default function App() {
                   className="p-3"
                 />
               </div>
+              {/* Recent entries fill the rest of the column (the Pi's 7" 1024x600 screen has room) */}
+              <EventList events={events} className="flex-1 min-h-0" />
             </div>
           </div>
 
