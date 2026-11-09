@@ -1,5 +1,8 @@
 import type { AlertLevel } from './contract';
 
+/** The demo's fake hub uses the real hub's PIN (processing/arming.py), so a demo behaves the same. */
+const DEMO_ARM_PIN = '6767';
+
 type DemoState = 'clear' | 'activity' | 'inside_moving' | 'inside_still' | 'leaving';
 
 export class DemoSource {
@@ -22,6 +25,134 @@ export class DemoSource {
   private radarLevel = 0.05;
   private alert: AlertLevel = 'clear';
   private distanceM: number | null = null;
+
+  // Fake hub settings, so the Settings panel and the detail views work without a hub. The
+  // commands the dashboard sends (set_threshold, set_range, calibrate, ...) change these.
+  private readonly startedAt = Date.now();
+  private thresholds: Record<'left' | 'right', number> = { left: 0.1176, right: 0.1257 };
+  private calibratedThresholds: Record<'left' | 'right', number> = { left: 0.1176, right: 0.1257 };
+  private readonly baselines: Record<'left' | 'right', number> = { left: 0.0588, right: 0.0584 };
+  private macs: Record<'left' | 'right', string> = { left: '1a:00:00:00:00:02', right: '1a:00:00:00:00:03' };
+  private radarThresholds = { moving: 20, still: 20 };
+  private calibratedRadar = { moving: 20, still: 20 };
+  private thresholdSource = 'hub calibration at 22:43';
+  private maxCm = 220;
+  private calState: 'idle' | 'countdown' | 'measuring' | 'done' | 'failed' = 'done';
+  private calRemaining = 0;
+  private calMessage = 'Using the calibration from 22:43';
+  private calAt: string | null = '2026-11-08 22:43';
+  private lastDistanceCm = 130;
+  // Arming, the same rules as processing/arming.py (same PIN, 5 wrong in a row locks it for 30 s)
+  private armed = true;
+  private armChangedAt: string | null = null;
+  private armRejections = 0;
+  private armWrongInRow = 0;
+  private armLockedUntil = 0;
+
+  /** Applies a dashboard command to the fake hub. Returns false for unknown commands. */
+  applyCommand(cmd: Record<string, unknown>): boolean {
+    const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+    const side = cmd.side === 'left' || cmd.side === 'right' ? cmd.side : null;
+    switch (cmd.type) {
+      case 'calibrate':
+        this.calState = 'countdown';
+        this.calRemaining = 5;
+        this.calMessage = 'Leave the zone. Measuring starts in 5 s';
+        return true;
+      case 'cancel_calibration':
+        if (this.calState === 'countdown' || this.calState === 'measuring') {
+          this.calState = 'idle';
+          this.calMessage = 'Calibration cancelled';
+        }
+        return true;
+      case 'swap_sides':
+        this.macs = { left: this.macs.right, right: this.macs.left };
+        return true;
+      case 'adjust_threshold': {
+        const factor = num(cmd.factor);
+        if (!side || factor === null || factor < 0.5 || factor > 2) return false;
+        this.thresholds[side] = Math.round(Math.max(0.02, this.thresholds[side] * factor, this.baselines[side] * 1.2) * 1e4) / 1e4;
+        return true;
+      }
+      case 'set_threshold': {
+        const value = num(cmd.value);
+        if (!side || value === null) return false;
+        this.thresholds[side] = Math.round(Math.min(2, Math.max(0.02, this.baselines[side] * 1.2, value)) * 1e4) / 1e4;
+        return true;
+      }
+      case 'reset_threshold':
+        if (!side) return false;
+        this.thresholds[side] = this.calibratedThresholds[side];
+        return true;
+      case 'set_radar_thresholds': {
+        const moving = num(cmd.moving);
+        const still = num(cmd.still);
+        if (moving !== null) this.radarThresholds.moving = Math.round(Math.min(100, Math.max(5, moving)));
+        if (still !== null) this.radarThresholds.still = Math.round(Math.min(100, Math.max(5, still)));
+        if (moving !== null || still !== null) this.thresholdSource = 'manual setting';
+        return true;
+      }
+      case 'reset_radar_thresholds':
+        this.radarThresholds = { ...this.calibratedRadar };
+        this.thresholdSource = 'calibrated values, restored';
+        return true;
+      case 'set_range': {
+        const v = num(cmd.max_cm) ?? 220;
+        this.maxCm = Math.round(Math.min(600, Math.max(100, v)));
+        return true;
+      }
+      case 'set_armed': {
+        // Delivered either way, like the real hub: a refusal shows up as more rejections
+        if (typeof cmd.armed !== 'boolean') return false;
+        const now = Date.now();
+        if (now < this.armLockedUntil) return true;
+        if (cmd.pin !== DEMO_ARM_PIN) {
+          this.armRejections += 1;
+          this.armWrongInRow += 1;
+          if (this.armWrongInRow >= 5) {
+            this.armWrongInRow = 0;
+            this.armLockedUntil = now + 30_000;
+          }
+          return true;
+        }
+        this.armWrongInRow = 0;
+        if (cmd.armed !== this.armed) {
+          this.armed = cmd.armed;
+          const d = new Date(now);
+          const pad = (n: number) => String(n).padStart(2, '0');
+          this.armChangedAt = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        }
+        return true;
+      }
+      default:
+        return false;
+    }
+  }
+
+  private tickCalibration(dt: number): void {
+    if (this.calState !== 'countdown' && this.calState !== 'measuring') return;
+    this.calRemaining -= dt;
+    if (this.calState === 'countdown') {
+      this.calMessage = `Leave the zone. Measuring starts in ${Math.max(0, Math.ceil(this.calRemaining))} s`;
+      if (this.calRemaining <= 0) {
+        this.calState = 'measuring';
+        this.calRemaining = 15;
+      }
+    } else {
+      this.calMessage = 'Measuring the empty zone for 15 s. Stay out of it';
+      if (this.calRemaining <= 0) {
+        this.calState = 'done';
+        this.calibratedThresholds = { left: 0.1176, right: 0.1257 };
+        this.thresholds = { ...this.calibratedThresholds };
+        this.calibratedRadar = { moving: 20, still: 20 };
+        this.radarThresholds = { ...this.calibratedRadar };
+        const d = new Date();
+        this.calAt = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+        this.thresholdSource = `hub calibration at ${this.calAt.slice(11)}`;
+        this.calMessage = 'Calibrated';
+      }
+    }
+  }
 
   start(onMessage: (raw: string) => void): void {
     if (this.intervalId !== null) {
@@ -63,7 +194,7 @@ export class DemoSource {
       this.demoState = 'inside_moving';
       this.phaseElapsed = 0;
       this.phaseDuration = 2.5;
-      this.distanceM = 2.1;
+      this.distanceM = 1.5;
       this.alert = 'inside';
       this.radarLevel = 0.5;
     } else if (this.demoState === 'inside_moving') {
@@ -78,7 +209,7 @@ export class DemoSource {
       this.phaseElapsed = 0;
       this.phaseDuration = 3.0;
       this.alert = 'inside';
-      this.distanceM = this.distanceM ?? 2.0;
+      this.distanceM = this.distanceM ?? 1.4;
       this.radarLevel = 0.05;
       this.leftMotion = false;
       this.rightMotion = false;
@@ -164,7 +295,7 @@ export class DemoSource {
         this.phaseElapsed = 0;
         this.phaseDuration = 2.0 + Math.random() * 1.0;
         this.alert = 'inside';
-        this.distanceM = Number((1.2 + Math.random() * 1.6).toFixed(1)); // 1.0 to 3.0 m
+        this.distanceM = Number((0.9 + Math.random() * 0.8).toFixed(1)); // 0.9 to 1.7 m: inside a 2 m triangle
         this.radarLevel = 0.45 + Math.random() * 0.15; // 0.4 to 0.6
       }
     } else if (this.demoState === 'inside_moving') {
@@ -175,7 +306,7 @@ export class DemoSource {
       // tick would cancel the drift. The message rounds it to 0.1 m.
       if (this.distanceM !== null) {
         const drift = (Math.random() * 2 - 1) * 0.05;
-        this.distanceM = Math.max(1.0, Math.min(3.0, this.distanceM + drift));
+        this.distanceM = Math.max(0.7, Math.min(1.7, this.distanceM + drift));
       }
 
       // Radar movement level 0.4 to 0.6
@@ -308,11 +439,58 @@ export class DemoSource {
       Math.max(0.05, Number((topStrength * 1.05 + 0.04).toFixed(2)))
     );
 
+    this.tickCalibration(dt);
+
     if (this.paused) {
       return;
     }
 
     if (this.onMessage) {
+      const leftRssi = Math.round(-67 + (Math.random() * 2 - 1));
+      const rightRssi = Math.round(-64 + (Math.random() * 2 - 1));
+      const leftPps = Math.round(22 + Math.random() * 3);
+      const rightPps = Math.round(22 + Math.random() * 3);
+      const links = [
+        { id: 'left', motion: this.leftMotion, strength: Number(this.leftStrength.toFixed(3)), rssi: leftRssi, pps: leftPps },
+        { id: 'right', motion: this.rightMotion, strength: Number(this.rightStrength.toFixed(3)), rssi: rightRssi, pps: rightPps },
+      ];
+
+      // Hub-style raw numbers that match the contract fields above
+      const linkDebug = (id: 'left' | 'right', strength: number, motion: boolean, rssi: number, pps: number) => {
+        const thr = this.thresholds[id];
+        const base = this.baselines[id];
+        const score = base + 2 * strength * (thr - base);
+        return {
+          id,
+          mac: this.macs[id],
+          online: true,
+          pps,
+          rssi,
+          score: Number(score.toFixed(4)),
+          threshold: thr,
+          baseline: base,
+          block: null,
+          block_threshold: null,
+          calibrated: true,
+          motion,
+          evidence: Number(Math.min(2, 2 * strength).toFixed(3)),
+          follow_scale: 1,
+          calibrated_threshold: this.calibratedThresholds[id],
+        };
+      };
+
+      const inside = this.alert === 'inside';
+      const distCm = this.distanceM !== null ? Math.round(this.distanceM * 100) : this.lastDistanceCm;
+      if (this.distanceM !== null) this.lastDistanceCm = distCm;
+      const movingNow = this.demoState === 'inside_moving';
+      const stillNow = this.demoState === 'inside_still';
+      const avgMoving = movingNow ? Math.round(Math.min(100, 40 + 120 * this.radarLevel)) : Math.round(this.radarLevel * 40);
+      const avgStill = stillNow ? 100 : inside ? Math.round(60 + 40 * Math.random()) : Math.round(this.radarLevel * 60);
+      const state = movingNow ? 3 : stillNow ? 2 : 0;
+      const stateName = state === 3 ? 'moving+still' : state === 2 ? 'still' : 'nobody';
+      const prediction = movingNow ? 'moving' : stillNow ? 'still' : 'nothing';
+      const zoneState = inside ? 'inside' : this.demoState === 'leaving' ? 'left_zone' : 'clear';
+
       const payload = {
         t: Date.now() / 1000,
         motion: topMotion,
@@ -320,28 +498,81 @@ export class DemoSource {
         confidence: Number(confidence.toFixed(3)),
         alert: this.alert,
         distance_m: this.distanceM !== null ? Number(this.distanceM.toFixed(1)) : null,
-        links: [
-          {
-            id: 'left',
-            motion: this.leftMotion,
-            strength: Number(this.leftStrength.toFixed(3)),
-            rssi: Math.round(-55 + (Math.random() * 2 - 1)),
-            pps: Math.round(68 + Math.random() * 4),
-          },
-          {
-            id: 'right',
-            motion: this.rightMotion,
-            strength: Number(this.rightStrength.toFixed(3)),
-            rssi: Math.round(-58 + (Math.random() * 2 - 1)),
-            pps: Math.round(68 + Math.random() * 4),
-          },
-        ],
+        entry_side: inside ? this.visitSide : null,
+        links,
         nodes: [
           { id: 'hub', online: true },
           { id: 'left', online: true },
           { id: 'right', online: true },
           { id: 'radar', online: true },
         ],
+        debug: {
+          source: 'demo',
+          uptime_s: Math.round((Date.now() - this.startedAt) / 1000),
+          links: [
+            linkDebug('left', this.leftStrength, this.leftMotion, leftRssi, leftPps),
+            linkDebug('right', this.rightStrength, this.rightMotion, rightRssi, rightPps),
+          ],
+          radar: {
+            fps: 10,
+            state,
+            state_name: stateName,
+            moving_cm: distCm,
+            moving_energy: movingNow ? Math.round(avgMoving + (Math.random() * 20 - 10)) : 0,
+            still_cm: distCm,
+            still_energy: inside ? Math.round(Math.min(100, avgStill + (Math.random() * 10 - 5))) : Math.round(avgStill),
+            detect_cm: distCm,
+            avg_moving: avgMoving,
+            avg_still: avgStill,
+            moving_threshold: this.radarThresholds.moving,
+            still_threshold: this.radarThresholds.still,
+            zone_cm: [0, this.maxCm],
+            prediction,
+            still_beyond_front: false,
+            module_nobody: false,
+            held: false,
+            status: 'RADAR_STATUS,found,rx_gpio=16',
+          },
+          esp1: { lines_per_s: leftPps + rightPps + 10, garbled: 0 },
+          calibration: {
+            state: this.calState,
+            remaining_s: this.calState === 'countdown' || this.calState === 'measuring' ? Number(Math.max(0, this.calRemaining).toFixed(1)) : null,
+            message: this.calMessage,
+            at: this.calAt,
+            results: null,
+          },
+          zone: {
+            state: zoneState,
+            entry_side: inside ? this.visitSide : null,
+            entry_logic: false,
+            exit_on_crossing: true,
+            blocked_sides: zoneState === 'left_zone' ? [this.visitSide] : [],
+          },
+          settings: {
+            baud: 921600,
+            baud_fixed: true,
+            max_distance_cm: this.maxCm,
+            default_max_distance_cm: 220,
+            range_limits_cm: [100, 600],
+            still_max_cm: Math.round(0.8 * this.maxCm),
+            moving_max_cm: Math.round(0.85 * this.maxCm),
+            far_entry_cm: Math.round(0.7 * this.maxCm),
+            moving_threshold: this.radarThresholds.moving,
+            still_threshold: this.radarThresholds.still,
+            calibrated_moving_threshold: this.calibratedRadar.moving,
+            calibrated_still_threshold: this.calibratedRadar.still,
+            threshold_source: this.thresholdSource,
+            radar_threshold_limits: [5, 100],
+            link_threshold_limits: [0.02, 2],
+          },
+          arm: {
+            armed: this.armed,
+            changed_at: this.armChangedAt,
+            rejections: this.armRejections,
+            locked_s: Number(Math.max(0, (this.armLockedUntil - Date.now()) / 1000).toFixed(1)),
+            ringer: { pin: 18, state: 'ready', sounding: this.armed && this.alert === 'inside' },
+          },
+        },
       };
       this.onMessage(JSON.stringify(payload));
     }

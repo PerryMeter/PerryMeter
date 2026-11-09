@@ -39,6 +39,11 @@ Thumbs.db
 
 # Room calibration written by processing/hub.py
 processing/hub_calibration.json
+# Armed or disarmed, written by processing/hub.py (processing/arming.py)
+processing/hub_state.json
 
 # Room calibration for the radar (one per room; never commit)
 radar_calibration.json
+
+# Walk-test recordings for processing/replay (10-15 MB each; never commit)
+processing/replay/recordings/

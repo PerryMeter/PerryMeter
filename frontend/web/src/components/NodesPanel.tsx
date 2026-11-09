@@ -4,6 +4,7 @@ type NodesPanelProps = {
   nodes: NodeState[] | null;
   links: LinkState[] | null;
   isFresh: boolean;
+  onSelect?: (id: string) => void;
   className?: string;
 };
 
@@ -23,12 +24,56 @@ function getNodeRole(id: string): string {
   }
 }
 
-export function NodesPanel({
-  nodes,
-  links,
-  isFresh,
-  className,
-}: NodesPanelProps) {
+function NodeRow({
+  id,
+  node,
+  link,
+  onSelect,
+}: {
+  id: string;
+  node: NodeState | null;
+  link: LinkState | undefined;
+  onSelect?: (id: string) => void;
+}) {
+  const role = getNodeRole(id);
+  const Tag = onSelect ? 'button' : 'div';
+  return (
+    <Tag
+      type={onSelect ? 'button' : undefined}
+      onClick={onSelect ? () => onSelect(id) : undefined}
+      className={`w-full flex items-center justify-between py-0.5 text-xs font-mono text-left ${
+        onSelect ? 'rounded-[4px] hover:bg-surface-2 focus:outline-none focus-visible:ring-1 focus-visible:ring-text' : ''
+      }`}
+      aria-label={onSelect ? `${id} node, click for details` : undefined}
+    >
+      <div className="flex items-center gap-2">
+        {node === null ? (
+          <span className="w-2 h-2 rounded-full border border-faint shrink-0" />
+        ) : node.online ? (
+          <span className="w-2 h-2 rounded-full bg-accent shrink-0" />
+        ) : (
+          <span className="w-2 h-2 rounded-full border border-muted shrink-0" />
+        )}
+        <span className={`uppercase font-medium ${node === null ? 'text-faint' : 'text-text'}`}>{id}</span>
+        {role && <span className={`text-[11px] ${node === null ? 'text-faint' : 'text-muted'}`}>{role}</span>}
+      </div>
+      <div className="flex items-center gap-2 text-muted tabular-nums text-[11px]">
+        {node === null ? (
+          <span className="text-faint">not installed</span>
+        ) : !node.online ? (
+          <span>offline</span>
+        ) : (
+          <>
+            {link?.rssi !== null && link?.rssi !== undefined && <span>{link.rssi} dBm</span>}
+            {link?.pps !== null && link?.pps !== undefined && <span>{link.pps}/s</span>}
+          </>
+        )}
+      </div>
+    </Tag>
+  );
+}
+
+export function NodesPanel({ nodes, links, isFresh, onSelect, className }: NodesPanelProps) {
   const hasBase = links?.some((l) => l.id === 'base') ?? false;
 
   return (
@@ -38,128 +83,24 @@ export function NodesPanel({
       } ${className ?? ''}`}
     >
       <div className="flex items-center justify-between pb-1.5 border-b border-line mb-1.5 shrink-0">
-        <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted">
-          NODES
-        </span>
+        <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted">Nodes</span>
       </div>
 
       {nodes === null ? (
-        <p className="text-faint text-xs py-2 font-mono">
-          Node status not reported
-        </p>
+        <p className="text-faint text-xs py-2 font-mono">Node status not reported</p>
       ) : (
         <div className="space-y-1">
-          {STANDARD_NODES.map((id) => {
-            const role = getNodeRole(id);
-            const reported = nodes.find((n) => n.id === id);
-
-            if (!reported) {
-              return (
-                <div
-                  key={id}
-                  className="flex items-center justify-between py-0.5 text-xs font-mono"
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full border border-faint shrink-0" />
-                    <span className="uppercase font-medium text-faint">
-                      {id}
-                    </span>
-                    {role && <span className="text-faint text-[11px]">{role}</span>}
-                  </div>
-                  <div>
-                    <span className="text-faint font-mono">not installed</span>
-                  </div>
-                </div>
-              );
-            }
-
-            const matchingLink = links?.find((l) => l.id === id);
-
-            return (
-              <div
-                key={id}
-                className="flex items-center justify-between py-0.5 text-xs font-mono"
-              >
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`w-2 h-2 rounded-full shrink-0 ${
-                      reported.online ? 'bg-accent' : 'bg-error'
-                    }`}
-                  />
-                  <span className="uppercase font-medium text-text">
-                    {id}
-                  </span>
-                  {role && <span className="text-muted text-[11px]">{role}</span>}
-                </div>
-
-                <div>
-                  {!reported.online ? (
-                    <span className="text-error font-mono">offline</span>
-                  ) : (
-                    <div className="flex items-center gap-2 text-muted tabular-nums text-[11px]">
-                      {matchingLink?.rssi !== null &&
-                        matchingLink?.rssi !== undefined && (
-                          <span>{matchingLink.rssi} dBm</span>
-                        )}
-                      {matchingLink?.pps !== null &&
-                        matchingLink?.pps !== undefined && (
-                          <span>{matchingLink.pps}/s</span>
-                        )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-
+          {STANDARD_NODES.map((id) => (
+            <NodeRow key={id} id={id} node={nodes.find((n) => n.id === id) ?? null} link={links?.find((l) => l.id === id)} onSelect={onSelect} />
+          ))}
           {nodes
             .filter((n) => !STANDARD_NODES.includes(n.id as (typeof STANDARD_NODES)[number]))
-            .map((node) => {
-              const role = getNodeRole(node.id);
-              const matchingLink = links?.find((l) => l.id === node.id);
-
-              return (
-                <div
-                  key={node.id}
-                  className="flex items-center justify-between py-0.5 text-xs font-mono"
-                >
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`w-2 h-2 rounded-full shrink-0 ${
-                        node.online ? 'bg-accent' : 'bg-error'
-                      }`}
-                    />
-                    <span className="uppercase font-medium text-text">
-                      {node.id}
-                    </span>
-                    {role && <span className="text-muted text-[11px]">{role}</span>}
-                  </div>
-
-                  <div>
-                    {!node.online ? (
-                      <span className="text-error font-mono">offline</span>
-                    ) : (
-                      <div className="flex items-center gap-2 text-muted tabular-nums text-[11px]">
-                        {matchingLink?.rssi !== null &&
-                          matchingLink?.rssi !== undefined && (
-                            <span>{matchingLink.rssi} dBm</span>
-                          )}
-                        {matchingLink?.pps !== null &&
-                          matchingLink?.pps !== undefined && (
-                            <span>{matchingLink.pps}/s</span>
-                          )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-
+            .map((node) => (
+              <NodeRow key={node.id} id={node.id} node={node} link={links?.find((l) => l.id === node.id)} onSelect={onSelect} />
+            ))}
           {!hasBase && (
             <div className="pt-1.5 border-t border-line/40">
-              <p className="text-[11px] text-faint font-mono">
-                Bottom side: not monitored (expansion kit)
-              </p>
+              <p className="text-[11px] text-faint font-mono">Front: no Wi-Fi link, covered by the radar</p>
             </div>
           )}
         </div>

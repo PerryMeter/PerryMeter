@@ -37,6 +37,57 @@ describe('parseHubDebug', () => {
     expect(parseHubDebug(JSON.stringify([{ debug: {} }]))).toBeNull();
   });
 
+  it('reads the settings block, side levels and radar notes', () => {
+    const d = parseHubDebug(JSON.stringify({
+      debug: {
+        links: [{ id: 'left', online: true, evidence: 0.57, follow_scale: 0.7, calibrated_threshold: 0.1176, calibrated: true, motion: false }],
+        radar: { state: 0, state_name: 'nobody', still_cm: 145, still_energy: 35, avg_still: 38, still_threshold: 20, held: true, module_nobody: true, still_beyond_front: false, zone_cm: [0, 220] },
+        zone: { state: 'left_zone', entry_side: null, entry_logic: false, exit_on_crossing: true, blocked_sides: ['right', 3] },
+        settings: {
+          baud: 921600, baud_fixed: true, max_distance_cm: 220, default_max_distance_cm: 220, range_limits_cm: [100, 600],
+          still_max_cm: 176, moving_max_cm: 187, far_entry_cm: 154, moving_threshold: 20, still_threshold: 20,
+          calibrated_moving_threshold: 20, calibrated_still_threshold: 20, threshold_source: 'hub calibration at 22:43',
+          radar_threshold_limits: [5, 100], link_threshold_limits: [0.02, 2],
+        },
+      },
+    }));
+    expect(d?.links[0]).toMatchObject({ evidence: 0.57, followScale: 0.7, calibratedThreshold: 0.1176 });
+    expect(d?.radar).toMatchObject({ held: true, moduleNobody: true, stillBeyondFront: false });
+    expect(d?.zone).toMatchObject({ state: 'left_zone', blockedSides: ['right'] });
+    expect(d?.settings).toMatchObject({ baud: 921600, baudFixed: true, maxDistanceCm: 220, stillMaxCm: 176, rangeLimitsCm: [100, 600], linkThresholdLimits: [0.02, 2] });
+  });
+
+  it('gives null settings and empty flags for an older hub', () => {
+    const d = parseHubDebug(JSON.stringify({ debug: { links: [{ id: 'left' }], radar: { fps: 10 }, zone: { state: 'clear' } } }));
+    expect(d?.settings).toBeNull();
+    expect(d?.links[0]).toMatchObject({ evidence: null, followScale: null, calibratedThreshold: null });
+    expect(d?.radar).toMatchObject({ held: false, moduleNobody: false, stillBeyondFront: false });
+    expect(d?.zone?.blockedSides).toEqual([]);
+  });
+
+  it('reads the arm state and the ringer', () => {
+    const d = parseHubDebug(JSON.stringify({
+      debug: {
+        arm: { armed: false, changed_at: '2026-11-09 02:40', rejections: 2, locked_s: 12.5, ringer: { pin: 18, state: 'ready', sounding: false } },
+      },
+    }));
+    expect(d?.arm).toEqual({
+      armed: false,
+      changedAt: '2026-11-09 02:40',
+      rejections: 2,
+      lockedS: 12.5,
+      ringer: { pin: 18, state: 'ready', sounding: false },
+    });
+  });
+
+  it('gives null arm for an older hub or a broken arm block', () => {
+    expect(parseHubDebug(JSON.stringify({ debug: { links: [] } }))?.arm).toBeNull();
+    expect(parseHubDebug(JSON.stringify({ debug: { arm: { armed: 'yes' } } }))?.arm).toBeNull();
+    expect(parseHubDebug(JSON.stringify({ debug: { arm: { armed: true } } }))?.arm).toEqual({
+      armed: true, changedAt: null, rejections: 0, lockedS: 0, ringer: null,
+    });
+  });
+
   it('turns wrong types into null and skips bad links', () => {
     const d = parseHubDebug(JSON.stringify({
       debug: {

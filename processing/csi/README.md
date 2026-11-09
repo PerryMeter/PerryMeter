@@ -1,27 +1,23 @@
-# RadarPing - Wi-Fi CSI
+# Experimental Wi-Fi CSI Detection
 
-Experimental Wi-Fi CSI motion detection using two ESP32s and Python.
+This directory contains earlier Wi-Fi CSI detection experiments developed during PerryMeter's development.
 
-## Hardware
-- NESP: Wi-Fi sender (USB power)
-- OESP: CSI receiver (USB serial, previously COM6)
-- Wi-Fi channel 11
-
-## Setup
-Run from this folder:
-
-python -m pip install -r requirements.txt
-python radarping_live.py --port COM6
+These scripts use recorded or live CSI measurements to explore motion detection and machine-learning approaches.
 
 ## Files
-- radarping_core.py: CSI preprocessing and features
-- radarping_live.py: Live ML detection and WebSocket server (port 8765)
-- radarping_record_events.py: Labelled data recording
-- train_radarping.py: Experimental model training
-- radarping_results/: Saved experimental ML model
 
-## Limitations
-The live detector uses an older experimental model.
-The newer controlled-test model is not integrated yet.
-Crossing detection remains unreliable across environments.
-Not a safety-certified system.
+| File | Purpose |
+|---|---|
+| `radarping_core.py` | CSI preprocessing and feature extraction |
+| `radarping_live.py` | Experimental live detection and WebSocket output |
+| `radarping_record_events.py` | Recording and labelling detection events |
+| `train_radarping.py` | Experimental model training |
+| `radarping_results/` | Saved experimental model |
+
+## Current Project
+
+The final integrated PerryMeter backend uses **`processing/hub.py`**, which combines Wi-Fi CSI from ESP2 and ESP3 with LD2410C radar measurements.
+
+The scripts in this directory are retained as development and experimental work. They are not required to launch the integrated backend.
+
+See [`../README.md`](../README.md) for the main processing documentation.

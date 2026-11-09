@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ConfidenceResult } from '../lib/confidence';
+import { computeConfidence } from '../lib/confidence';
 import type { AlertLevel, Detection, LinkState, NodeState } from '../lib/contract';
 import { parseDetections } from '../lib/contract';
 import { DemoSource } from '../lib/demoSource';
@@ -53,6 +55,8 @@ export type StreamState = {
   debug: HubDebug | null;
   /** The latest message exactly as received, for the Sensors panel. */
   rawMessage: string | null;
+  /** Confidence in the current verdict, computed on the dashboard from the hub's raw numbers. */
+  confidence: ConfidenceResult;
 };
 
 export type SignalRefValue = {
@@ -65,7 +69,13 @@ export type SignalRefValue = {
   nodes: NodeState[] | null;
   /** Side of the ongoing entry ("left", "right", "base"), or null when nobody is inside. */
   entrySide: string | null;
+  /** Computed confidence 0 to 1 (drives the heat band's intensity). */
+  confidence: number;
+  /** The radar's cutoff distance from the hub's settings, or null when unknown. */
+  rangeCm: number | null;
 };
+
+const NO_CONFIDENCE: ConfidenceResult = { value: null, basis: [], source: 'none' };
 
 export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
   // Keep armed in a ref so changes do not restart sources
@@ -99,6 +109,8 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
     links: null,
     nodes: null,
     entrySide: null,
+    confidence: 0,
+    rangeCm: null,
   });
 
   // Source instances
@@ -124,6 +136,7 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
     nodes: null,
     debug: null,
     rawMessage: null,
+    confidence: NO_CONFIDENCE,
   }));
 
   // Effect to manage data source: depends ONLY on [mode, url]
@@ -150,6 +163,8 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
       links: null,
       nodes: null,
       entrySide: null,
+      confidence: 0,
+      rangeCm: null,
     };
 
     const processRawMessage = (raw: string) => {
@@ -205,7 +220,8 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
               startAt: detection.receivedAt,
               endAt: null,
               peak: detection.strength,
-              armed: armedRef.current,
+              // The hub's arm state when it has one, else this browser's
+              armed: debugRef.current?.arm?.armed ?? armedRef.current,
               side,
             },
             ...eventsRef.current,
@@ -247,6 +263,9 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
         const ongoing = eventsRef.current[0];
         signalRef.current.entrySide =
           isInside && ongoing !== undefined && ongoing.endAt === null ? ongoing.side : null;
+        const conf = computeConfidence(debugRef.current, detection.alert, detection.confidence, true);
+        signalRef.current.confidence = conf.value ?? detection.confidence ?? 0.5;
+        signalRef.current.rangeCm = debugRef.current?.settings?.maxDistanceCm ?? null;
       }
     };
 
@@ -362,12 +381,19 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
         signalRef.current.links = null;
         signalRef.current.nodes = null;
         signalRef.current.entrySide = null;
+        signalRef.current.confidence = 0;
       }
 
       const activeAlert = isFresh && latestRef.current ? latestRef.current.alert : null;
       const activeDist = isFresh && latestRef.current ? latestRef.current.distanceM : null;
       const activeLinks = isFresh && latestRef.current ? latestRef.current.links : null;
       const activeNodes = isFresh && latestRef.current ? latestRef.current.nodes : null;
+      const confidence = computeConfidence(
+        debugRef.current,
+        activeAlert,
+        latestRef.current?.confidence ?? null,
+        isFresh,
+      );
 
       setStreamState({
         latest: latestRef.current,
@@ -382,11 +408,12 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
         now,
         alert: activeAlert,
         distanceM: activeDist,
-        armed: armedRef.current,
+        armed: debugRef.current?.arm?.armed ?? armedRef.current,
         links: activeLinks,
         nodes: activeNodes,
         debug: debugRef.current,
         rawMessage: rawMessageRef.current,
+        confidence,
       });
     }, 100);
 
@@ -414,10 +441,14 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
     }
   }, [mode]);
 
-  /** Sends a command to the hub in Live mode (for example {type: 'calibrate'}). False if not sent. */
+  /** Sends a command to the hub (for example {type: 'calibrate'}); in Demo mode the fake hub
+   *  applies it. False if it could not be sent. */
   const sendCommand = useCallback((command: Record<string, unknown>): boolean => {
+    if (mode === 'demo') {
+      return demoSourceRef.current?.applyCommand(command) ?? false;
+    }
     return liveSourceRef.current?.send(JSON.stringify(command)) ?? false;
-  }, []);
+  }, [mode]);
 
   return {
     ...streamState,

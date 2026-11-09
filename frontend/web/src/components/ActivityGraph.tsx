@@ -9,13 +9,15 @@ import {
   YAxis,
 } from 'recharts';
 import type { HistoryPoint } from '../hooks/useDetectionStream';
-import { theme } from '../theme';
+import { readPalette } from '../theme';
 
 type ActivityGraphProps = {
   history: HistoryPoint[];
   now: number;
   isFresh: boolean;
   isKiosk?: boolean;
+  /** Changes with the theme, so the chart re-reads its colours. */
+  themeKey: string;
   className?: string;
 };
 
@@ -104,8 +106,12 @@ export function ActivityGraph({
   now,
   isFresh,
   isKiosk = false,
+  themeKey,
   className,
 }: ActivityGraphProps) {
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- re-read the CSS variables when the theme changes
+  const theme = useMemo(() => readPalette(), [themeKey]);
+
   const chartData = useMemo(() => {
     const data: { x: number; strength: number | null }[] = [];
     for (let i = 0; i < history.length; i++) {
@@ -164,12 +170,6 @@ export function ActivityGraph({
                   : { top: 6, right: 16, left: 0, bottom: 0 }
               }
             >
-              <defs>
-                <linearGradient id="activity-fill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={theme.accent} stopOpacity={0.25} />
-                  <stop offset="100%" stopColor={theme.accent} stopOpacity={0} />
-                </linearGradient>
-              </defs>
               <CartesianGrid horizontal={true} vertical={false} stroke={theme.line} />
               <XAxis
                 type="number"
@@ -211,8 +211,8 @@ export function ActivityGraph({
                   x2={run.x2}
                   y1={0}
                   y2={100}
-                  fill={run.alert === 'inside' ? theme.motion : theme.warn}
-                  fillOpacity={run.alert === 'inside' ? 0.1 : 0.08}
+                  fill={run.alert === 'inside' ? theme.alert : theme.warn}
+                  fillOpacity={run.alert === 'inside' ? 0.12 : 0.1}
                   strokeOpacity={0}
                   ifOverflow="hidden"
                 />
@@ -222,7 +222,8 @@ export function ActivityGraph({
                 dataKey="strength"
                 stroke={theme.accent}
                 strokeWidth={1.5}
-                fill="url(#activity-fill)"
+                fill={theme.accent}
+                fillOpacity={0.12}
                 isAnimationActive={false}
                 dot={false}
                 activeDot={false}
