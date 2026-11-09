@@ -9,6 +9,7 @@ import type { SettingsSection } from './components/SettingsPanel';
 import { SettingsPanel } from './components/SettingsPanel';
 import type { MapTarget } from './components/ZoneMap';
 import { ZoneMap } from './components/ZoneMap';
+import { SimpleView } from './components/SimpleView';
 import { SourceBar } from './components/SourceBar';
 import { StatusFooter } from './components/StatusFooter';
 import { TopBar } from './components/TopBar';
@@ -17,12 +18,13 @@ import { useDetectionStream } from './hooks/useDetectionStream';
 import { ZoneAlarm } from './lib/alarm';
 import type { Selection } from './lib/details';
 import { buildDetail } from './lib/details';
-import type { DashboardSettings, Mode } from './lib/settings';
+import type { DashboardSettings, Mode, View } from './lib/settings';
 import {
   getInitialArmed,
   getInitialMode,
   getInitialSensorsOpen,
   getInitialWsUrl,
+  getViewOverride,
   applyThemeAttribute,
   isKioskMode,
   loadSettings,
@@ -50,6 +52,9 @@ export default function App() {
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [systemTheme, setSystemTheme] = useState<'dark' | 'light'>(() => resolveTheme('system'));
+  // ?view=simple|admin wins until the user switches; the saved choice is settings.view (default Simple)
+  const [viewOverride, setViewOverride] = useState<View | null>(() => getViewOverride());
+  const view: View = viewOverride ?? settings.view;
 
   const alarmRef = useRef<ZoneAlarm | null>(null);
 
@@ -187,6 +192,20 @@ export default function App() {
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
   const closeDetail = useCallback(() => setSelection(null), []);
 
+  const switchView = (next: View) => {
+    setViewOverride(null);
+    handleChangeSettings({ ...settings, view: next });
+    if (next === 'simple') {
+      setSettingsOpen(false);
+      setSelection(null);
+      // Simple has no demo controls, so a paused demo feed would stay stuck
+      if (isPaused) {
+        setIsPaused(false);
+        setPaused(false);
+      }
+    }
+  };
+
   const handleMapSelect = (target: MapTarget) => {
     switch (target.kind) {
       case 'side':
@@ -231,12 +250,39 @@ export default function App() {
   const themeKey = resolvedTheme;
   const units = settings.units;
 
+  const rootLayout = isKiosk
+    ? 'p-3 overflow-hidden justify-between'
+    : view === 'simple'
+      ? 'p-4 md:p-6 overflow-x-hidden overflow-y-auto min-[900px]:overflow-hidden'
+      : 'p-4 md:p-6 overflow-x-hidden overflow-y-auto min-[1100px]:overflow-hidden';
+
   return (
-    <div
-      className={`min-h-[100dvh] h-[100dvh] flex flex-col ${
-        isKiosk ? 'p-3 overflow-hidden justify-between' : 'p-4 md:p-6 overflow-x-hidden overflow-y-auto min-[1100px]:overflow-hidden'
-      } bg-bg text-text`}
-    >
+    <div className={`min-h-[100dvh] h-[100dvh] flex flex-col ${rootLayout} bg-bg text-text`}>
+      {view === 'simple' ? (
+        <SimpleView
+          mode={mode}
+          status={status}
+          retryInS={retryInS}
+          lastMessageAt={lastMessageAt}
+          now={now}
+          isKiosk={isKiosk}
+          isFresh={isFresh}
+          alert={alert}
+          distanceM={distanceM}
+          armed={armed}
+          latest={latest}
+          events={events}
+          history={history}
+          nodes={nodes}
+          signalRef={signalRef}
+          themeKey={themeKey}
+          units={units}
+          debug={debug}
+          sendCommand={sendCommand}
+          onSwitchToAdmin={() => switchView('admin')}
+        />
+      ) : (
+      <>
       <TopBar
         mode={mode}
         status={status}
@@ -251,6 +297,7 @@ export default function App() {
         onArmedChange={handleArmedChange}
         onToggleSensors={handleToggleSensors}
         onToggleSettings={handleToggleSettings}
+        onSwitchToSimple={() => switchView('simple')}
       />
 
       {!isKiosk && (
@@ -388,6 +435,8 @@ export default function App() {
 
           <StatusFooter mode={mode} wsUrl={wsUrl} messagesPerSecond={messagesPerSecond} lastMessageAt={lastMessageAt} invalidCount={invalidCount} now={now} />
         </>
+      )}
+      </>
       )}
     </div>
   );
