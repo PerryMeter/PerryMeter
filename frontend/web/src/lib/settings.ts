@@ -118,8 +118,11 @@ export function saveArmed(armed: boolean): void {
 
 export type ThemeSetting = 'dark' | 'light' | 'system';
 export type Units = 'metric' | 'imperial';
+/** Simple: map, status, calibrate and a log for everyday use. Admin: the full dashboard. */
+export type View = 'simple' | 'admin';
 
 export type DashboardSettings = {
+  view: View;
   theme: ThemeSetting;
   units: Units;
   /** Alarm sound while armed and ALERT. */
@@ -132,6 +135,7 @@ export type DashboardSettings = {
 };
 
 export const DEFAULT_SETTINGS: DashboardSettings = {
+  view: 'simple',
   theme: 'dark',
   units: 'metric',
   soundOn: false,
@@ -150,6 +154,7 @@ export function loadSettings(): DashboardSettings {
     const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
     if (raw) {
       const saved = JSON.parse(raw) as Partial<Record<keyof DashboardSettings, unknown>>;
+      if (saved.view === 'simple' || saved.view === 'admin') result.view = saved.view;
       if (saved.theme === 'dark' || saved.theme === 'light' || saved.theme === 'system') result.theme = saved.theme;
       if (saved.units === 'metric' || saved.units === 'imperial') result.units = saved.units;
       if (typeof saved.soundOn === 'boolean') result.soundOn = saved.soundOn;
@@ -172,6 +177,17 @@ export function loadSettings(): DashboardSettings {
 
 export function saveSettings(settings: DashboardSettings): void {
   safeSetStorage(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+}
+
+/** ?view=simple or ?view=admin, or null. Kept apart from loadSettings() so it is never saved. */
+export function getViewOverride(): View | null {
+  const query = getSearchParam('view');
+  return query === 'simple' || query === 'admin' ? query : null;
+}
+
+/** The view to start in: the URL wins, then the saved choice, then Simple (also on the kiosk). */
+export function getInitialView(): View {
+  return getViewOverride() ?? loadSettings().view;
 }
 
 /** 'dark' or 'light' for a theme setting ('system' follows the OS). */

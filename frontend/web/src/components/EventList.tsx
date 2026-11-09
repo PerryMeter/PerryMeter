@@ -4,17 +4,21 @@ import { formatClock, formatDuration } from '../lib/format';
 type EventListProps = {
   events: DetectionEvent[];
   onSelect?: (startAt: number) => void;
+  /** Just the list, without the card and its title (for the Simple view's log drawer). */
+  bare?: boolean;
   className?: string;
 };
 
-export function EventList({ events, onSelect, className }: EventListProps) {
+export function EventList({ events, onSelect, bare = false, className }: EventListProps) {
   const displayEvents = events.slice(0, 8);
 
   return (
-    <div className={`p-5 rounded-[10px] border border-line bg-surface flex flex-col min-h-0 ${className ?? ''}`}>
-      <div className="flex items-center justify-between pb-2 border-b border-line mb-2 shrink-0">
-        <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted">Events</span>
-      </div>
+    <div className={`${bare ? '' : 'p-5 rounded-[10px] border border-line bg-surface'} flex flex-col min-h-0 ${className ?? ''}`}>
+      {!bare && (
+        <div className="flex items-center justify-between pb-2 border-b border-line mb-2 shrink-0">
+          <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted">Events</span>
+        </div>
+      )}
 
       <div className="flex-1 min-h-0 overflow-y-auto space-y-1 font-mono text-[13px] pr-1">
         {displayEvents.length === 0 ? (

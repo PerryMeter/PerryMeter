@@ -18,10 +18,14 @@ type TopBarProps = {
   onArmedChange: (armed: boolean) => void;
   onToggleSensors: () => void;
   onToggleSettings: () => void;
+  /** Back to the Simple view. */
+  onSwitchToSimple: () => void;
 };
 
 const BAR_BUTTON =
   'px-3 py-1 rounded-[6px] border text-xs font-medium transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-text';
+const QUIET =
+  'px-2 py-1 rounded-[6px] text-xs text-muted hover:text-text focus:outline-none focus-visible:ring-1 focus-visible:ring-text';
 
 export function TopBar({
   mode,
@@ -37,6 +41,7 @@ export function TopBar({
   onArmedChange,
   onToggleSensors,
   onToggleSettings,
+  onSwitchToSimple,
 }: TopBarProps) {
   const toggleStyle = (on: boolean) => `${BAR_BUTTON} ${on ? 'border-line-strong bg-surface-2 text-text' : 'border-line-strong bg-surface text-text hover:bg-surface-2'}`;
 
@@ -75,6 +80,9 @@ export function TopBar({
             <button type="button" onClick={onToggleSettings} aria-pressed={settingsOpen} className={toggleStyle(settingsOpen)}>
               Settings
             </button>
+            <button type="button" onClick={onSwitchToSimple} className={QUIET}>
+              Simple
+            </button>
           </>
         ) : (
           <>
@@ -111,6 +119,9 @@ export function TopBar({
             </button>
             <button type="button" onClick={onToggleSettings} aria-pressed={settingsOpen} className={toggleStyle(settingsOpen)}>
               Settings
+            </button>
+            <button type="button" onClick={onSwitchToSimple} className={QUIET}>
+              Simple
             </button>
           </>
         )}
