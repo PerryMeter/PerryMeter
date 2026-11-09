@@ -10,6 +10,18 @@ The ESP32 devices establish two wireless detection boundaries, while the radar m
 
 A Raspberry Pi processes the sensor data and sends live updates to a browser-based dashboard, allowing operators to monitor activity without using cameras.
 
+## Pitch Deck
+
+Our natHacks 2026 pitch deck is in this repository: [`docs/PerryMeter_PitchDeck.pptx`](docs/PerryMeter_PitchDeck.pptx) (12 slides, about 40 MB). It covers the problem, the three-cone solution, how it works, impact, the tech stack, next steps, scalability, the demo and our sources.
+
+GitHub cannot preview PowerPoint files in the browser, so download the deck first:
+
+- **Direct download:** [PerryMeter_PitchDeck.pptx](https://github.com/PerryMeter/PerryMeter/raw/main/docs/PerryMeter_PitchDeck.pptx)
+- **From GitHub:** open [`docs/PerryMeter_PitchDeck.pptx`](docs/PerryMeter_PitchDeck.pptx), then click **View raw** or the download button.
+- **From a clone:** after `git clone`, it is at `docs/PerryMeter_PitchDeck.pptx`.
+
+Open it with Microsoft PowerPoint, Keynote or LibreOffice Impress. For Google Slides, upload it to Google Drive, then choose **Open with > Google Slides**.
+
 ## How It Works
 
 PerryMeter uses three ESP32 devices, one LD2410C radar sensor, and a Raspberry Pi.
@@ -77,7 +89,7 @@ The two Wi-Fi connections monitor two sides of the triangular arrangement. The r
 | `processing/` | Sensor processing, detection logic, and backend server |
 | `frontend/web/` | Web dashboard built with React, TypeScript, and Vite |
 | `data/` | Recorded CSI datasets and related documentation |
-| `docs/` | Technical documentation |
+| `docs/` | Technical documentation and the pitch deck |
 | `project.md` | Additional project design and development notes |
 | `frontend/pi_display/` | Earlier PySide6 dashboard prototype |
 
