@@ -6,6 +6,7 @@ import type { HubDebug } from '../lib/hubDebug';
 import type { Mode, Units } from '../lib/settings';
 import { formatMetres } from '../lib/units';
 import { ActivityGraph } from './ActivityGraph';
+import { ArmControl } from './ArmControl';
 import { CalibrateControl } from './CalibrateControl';
 import { LinkStatusPill } from './LinkStatusPill';
 import { LogDrawer } from './LogDrawer';
@@ -31,6 +32,8 @@ type SimpleViewProps = {
   units: Units;
   debug: HubDebug | null;
   sendCommand: (command: Record<string, unknown>) => boolean;
+  /** Opens the PIN dialog to arm (true) or disarm (false). */
+  onRequestArm: (armed: boolean) => void;
   onSwitchToAdmin: () => void;
 };
 
@@ -245,7 +248,11 @@ export function SimpleView(props: SimpleViewProps) {
               units={units}
               className="order-1 min-[900px]:order-none min-[900px]:flex-1 min-[900px]:min-h-0"
             />
-            <CalibrateControl debug={debug} isFresh={isFresh} sendCommand={sendCommand} className="order-3 min-[900px]:order-none shrink-0" />
+            {/* Side by side on wide screens, so the zone status keeps its height on the Pi's 600 px */}
+            <div className={`order-3 min-[900px]:order-none shrink-0 grid grid-cols-1 sm:grid-cols-2 ${isKiosk ? 'gap-2' : 'gap-3'}`}>
+              <ArmControl arm={debug?.arm ?? null} isFresh={isFresh} onRequest={props.onRequestArm} className="min-w-0" />
+              <CalibrateControl debug={debug} isFresh={isFresh} sendCommand={sendCommand} className="min-w-0" />
+            </div>
             <Devices nodes={nodes} isFresh={isFresh} className="order-3 min-[900px]:order-none shrink-0" />
             <div className="order-3 min-[900px]:order-none shrink-0 min-w-0">
               <ActivityGraph

@@ -86,6 +86,25 @@ export type HubZone = {
   blockedSides: string[];
 };
 
+/** The physical ringer on the Pi (a passive buzzer on a GPIO pin, see processing/arming.py). */
+export type HubRinger = {
+  pin: number | null;
+  /** ready, unavailable (no GPIO here), off (turned off), error */
+  state: string | null;
+  sounding: boolean;
+};
+
+/** Armed or disarmed, kept by the hub and changed only with the PIN (hub.py debug.arm). */
+export type HubArm = {
+  armed: boolean;
+  changedAt: string | null;
+  /** Wrong PINs since the hub started: it goes up when a set_armed is refused. */
+  rejections: number;
+  /** Seconds left of the lockout after too many wrong PINs (0 when not locked). */
+  lockedS: number;
+  ringer: HubRinger | null;
+};
+
 export type HubDebug = {
   source: string | null;
   uptimeS: number | null;
@@ -95,6 +114,8 @@ export type HubDebug = {
   calibration: HubCalibration | null;
   zone: HubZone | null;
   settings: HubSettings | null;
+  /** Null from a hub without arming. */
+  arm: HubArm | null;
 };
 
 type Obj = Record<string, unknown>;
@@ -196,6 +217,19 @@ function parseCalibration(v: unknown): HubCalibration | null {
   };
 }
 
+function parseArm(v: unknown): HubArm | null {
+  if (!isObj(v) || typeof v.armed !== 'boolean') return null;
+  return {
+    armed: v.armed,
+    changedAt: str(v.changed_at),
+    rejections: num(v.rejections) ?? 0,
+    lockedS: num(v.locked_s) ?? 0,
+    ringer: isObj(v.ringer)
+      ? { pin: num(v.ringer.pin), state: str(v.ringer.state), sounding: v.ringer.sounding === true }
+      : null,
+  };
+}
+
 /** Returns the hub's debug section from one raw message, or null if there is none. */
 export function parseHubDebug(raw: string): HubDebug | null {
   let data: unknown;
@@ -228,5 +262,6 @@ export function parseHubDebug(raw: string): HubDebug | null {
         }
       : null,
     settings: parseSettings(d.settings),
+    arm: parseArm(d.arm),
   };
 }

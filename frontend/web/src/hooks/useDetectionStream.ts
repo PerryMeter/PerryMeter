@@ -220,7 +220,8 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
               startAt: detection.receivedAt,
               endAt: null,
               peak: detection.strength,
-              armed: armedRef.current,
+              // The hub's arm state when it has one, else this browser's
+              armed: debugRef.current?.arm?.armed ?? armedRef.current,
               side,
             },
             ...eventsRef.current,
@@ -407,7 +408,7 @@ export function useDetectionStream(mode: Mode, url: string, armed: boolean) {
         now,
         alert: activeAlert,
         distanceM: activeDist,
-        armed: armedRef.current,
+        armed: debugRef.current?.arm?.armed ?? armedRef.current,
         links: activeLinks,
         nodes: activeNodes,
         debug: debugRef.current,

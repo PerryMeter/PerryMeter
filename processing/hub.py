@@ -54,8 +54,12 @@ Commands the dashboard sends over the WebSocket (one JSON object each):
     {"type": "set_radar_thresholds", "moving": 20, "still": 20}  either or both, 5 to 100
     {"type": "reset_radar_thresholds"}                           back to the calibrated values
     {"type": "set_range", "max_cm": 220}                         radar cutoff, 100 to 600 cm
-The last five only move numbers the existing rules read (see DEFAULT_MAX_DISTANCE_CM); the
-decision code is untouched and, untouched, they leave everything as it was.
+    {"type": "set_armed", "armed": false, "pin": "6767"}         arm or disarm, with the PIN
+The set_threshold through set_range commands only move numbers the existing rules read (see
+DEFAULT_MAX_DISTANCE_CM); the decision code is untouched and, untouched, they leave everything
+as it was. Arming (processing/arming.py) never changes what the hub decides. It changes whether
+the ringer sounds: a passive buzzer on GPIO18 that rings while the zone is armed and ALERT.
+debug.arm shows the state.
 
 Calibration ("calibrate" command from the dashboard, or --calibrate-on-start): after a countdown
 to leave the area, the hub measures the empty zone and sets
@@ -86,6 +90,7 @@ import json
 import math
 import os
 import random
+import signal
 import sys
 import threading
 import time
@@ -99,6 +104,12 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 import radar_settings as rs  # noqa: E402
 from radar_server import read_frames  # noqa: E402
+
+# Arming and the ringer sit next to this file (found even when hub.py is loaded by path)
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.append(_HERE)
+from arming import RINGER_HZ, RINGER_PIN, ArmState, Ringer  # noqa: E402
 
 BAUD = 921600          # radar bridge and ESP1 both use 921600
 SEND_RATE = 10         # messages per second to the dashboard
@@ -1089,6 +1100,9 @@ async def run(args):
     loop_start = time.time()
     if args.calibrate_on_start:
         calibrator.start(time.time(), args.countdown, args.calibration_seconds)
+    # Arming and the ringer only decide whether the buzzer sounds, never what the hub detects
+    arm = ArmState()
+    ringer = Ringer(args.ringer_pin, args.ringer_hz)
 
     async def handler(websocket):
         async for raw in websocket:
@@ -1176,6 +1190,15 @@ async def run(args):
                     with links_lock:
                         save_hub_calibration_all(links)
                     print(f"range: radar counts targets up to {rs.MAX_DISTANCE_CM} cm", flush=True)
+            elif cmd.get("type") == "set_armed":
+                # {"type": "set_armed", "armed": false, "pin": "6767"}: see processing/arming.py
+                wanted = cmd.get("armed")
+                result = arm.request(wanted, cmd.get("pin"), time.time(), now_text())
+                if result == "ok":
+                    ringer.chirp(2 if arm.armed else 1)
+                    print(f"arm: {'armed' if arm.armed else 'disarmed'} from the dashboard", flush=True)
+                else:
+                    print(f"arm: request to {'arm' if wanted else 'disarm'} refused ({result})", flush=True)
 
     async with serve(handler, args.host, args.port) as server:
         print(f"Perrymeter hub on ws://{args.host}:{args.port} (Ctrl+C to stop)", flush=True)
@@ -1185,6 +1208,8 @@ async def run(args):
         for link in links.values():
             print(f"Wi-Fi {link.side} = {link.mac}, threshold {link.threshold}"
                   f"{'' if link.calibrated else ' (default, not calibrated)'}", flush=True)
+        print(f"Zone {'armed' if arm.armed else 'disarmed'}"
+              f"{' since ' + arm.changed_at if arm.changed_at else ''}; ringer: {ringer.describe()}", flush=True)
         last_status, last_alert = time.time(), None
         while True:
             await asyncio.sleep(1.0 / args.rate)
@@ -1297,6 +1322,7 @@ async def run(args):
                             "radar_threshold_limits": list(RADAR_THRESHOLD_LIMITS),
                             "link_threshold_limits": list(LINK_THRESHOLD_LIMITS),
                         },
+                        "arm": {**arm.status(now), "ringer": ringer.status()},
                     },
                 }
                 if links:
@@ -1308,6 +1334,8 @@ async def run(args):
                 if alert != last_alert:
                     print(f"alert: {alert}", flush=True)
                     last_alert = alert
+            # The ringer sounds while the zone is armed and ALERT, and stops when the data stops
+            ringer.set_alarm(msg is not None and arm.armed and msg["alert"] == "inside")
 
             if now - last_status >= 1.0:
                 last_status = now
@@ -1332,6 +1360,7 @@ async def run(args):
                              f"{', from ' + gate.entry_side if gate.inside and gate.entry_side else ''})")
                 if calibrator.state in ("countdown", "measuring"):
                     parts.append(f"calibration {calibrator.state} {calibrator.until - now:.0f}s")
+                parts.append(f"{'armed' if arm.armed else 'disarmed'}{' RINGING' if ringer.sounding else ''}")
                 print(" | ".join(parts) + f" | clients {len(server.connections)}", flush=True)
 
 
@@ -1361,11 +1390,20 @@ def main():
     p.add_argument("--host", default="0.0.0.0", help="0.0.0.0 lets other computers connect")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--rate", type=float, default=SEND_RATE, help="messages per second")
+    p.add_argument("--ringer-pin", type=int, default=RINGER_PIN,
+                   help="GPIO (BCM number) of the passive buzzer on a Raspberry Pi; 0 turns it off")
+    p.add_argument("--ringer-hz", type=int, default=RINGER_HZ, help="the buzzer's tone")
     args = p.parse_args()
+    # pkill sends SIGTERM: stop the same way as Ctrl+C, so the ringer pin is left off
+    signal.signal(signal.SIGTERM, _stop_on_sigterm)
     try:
         asyncio.run(run(args))
     except KeyboardInterrupt:
         print("\nStopped.")
+
+
+def _stop_on_sigterm(signum, frame):
+    raise KeyboardInterrupt
 
 
 if __name__ == "__main__":

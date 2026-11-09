@@ -18,7 +18,7 @@ function radar(over: Partial<HubRadarDebug>): HubRadarDebug {
 }
 
 function debug(over: Partial<HubDebug>): HubDebug {
-  return { source: 'esp1', uptimeS: 10, links: [], radar: null, esp1: null, calibration: null, zone: null, settings: null, ...over };
+  return { source: 'esp1', uptimeS: 10, links: [], radar: null, esp1: null, calibration: null, zone: null, settings: null, arm: null, ...over };
 }
 
 describe('computeConfidence', () => {

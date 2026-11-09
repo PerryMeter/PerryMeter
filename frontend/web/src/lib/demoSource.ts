@@ -1,5 +1,8 @@
 import type { AlertLevel } from './contract';
 
+/** The demo's fake hub uses the real hub's PIN (processing/arming.py), so a demo behaves the same. */
+const DEMO_ARM_PIN = '6767';
+
 type DemoState = 'clear' | 'activity' | 'inside_moving' | 'inside_still' | 'leaving';
 
 export class DemoSource {
@@ -39,6 +42,12 @@ export class DemoSource {
   private calMessage = 'Using the calibration from 22:43';
   private calAt: string | null = '2026-11-08 22:43';
   private lastDistanceCm = 130;
+  // Arming, the same rules as processing/arming.py (same PIN, 5 wrong in a row locks it for 30 s)
+  private armed = true;
+  private armChangedAt: string | null = null;
+  private armRejections = 0;
+  private armWrongInRow = 0;
+  private armLockedUntil = 0;
 
   /** Applies a dashboard command to the fake hub. Returns false for unknown commands. */
   applyCommand(cmd: Record<string, unknown>): boolean {
@@ -90,6 +99,29 @@ export class DemoSource {
       case 'set_range': {
         const v = num(cmd.max_cm) ?? 220;
         this.maxCm = Math.round(Math.min(600, Math.max(100, v)));
+        return true;
+      }
+      case 'set_armed': {
+        // Delivered either way, like the real hub: a refusal shows up as more rejections
+        if (typeof cmd.armed !== 'boolean') return false;
+        const now = Date.now();
+        if (now < this.armLockedUntil) return true;
+        if (cmd.pin !== DEMO_ARM_PIN) {
+          this.armRejections += 1;
+          this.armWrongInRow += 1;
+          if (this.armWrongInRow >= 5) {
+            this.armWrongInRow = 0;
+            this.armLockedUntil = now + 30_000;
+          }
+          return true;
+        }
+        this.armWrongInRow = 0;
+        if (cmd.armed !== this.armed) {
+          this.armed = cmd.armed;
+          const d = new Date(now);
+          const pad = (n: number) => String(n).padStart(2, '0');
+          this.armChangedAt = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        }
         return true;
       }
       default:
@@ -532,6 +564,13 @@ export class DemoSource {
             threshold_source: this.thresholdSource,
             radar_threshold_limits: [5, 100],
             link_threshold_limits: [0.02, 2],
+          },
+          arm: {
+            armed: this.armed,
+            changed_at: this.armChangedAt,
+            rejections: this.armRejections,
+            locked_s: Number(Math.max(0, (this.armLockedUntil - Date.now()) / 1000).toFixed(1)),
+            ringer: { pin: 18, state: 'ready', sounding: this.armed && this.alert === 'inside' },
           },
         },
       };

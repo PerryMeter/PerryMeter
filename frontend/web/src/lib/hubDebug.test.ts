@@ -65,6 +65,29 @@ describe('parseHubDebug', () => {
     expect(d?.zone?.blockedSides).toEqual([]);
   });
 
+  it('reads the arm state and the ringer', () => {
+    const d = parseHubDebug(JSON.stringify({
+      debug: {
+        arm: { armed: false, changed_at: '2026-11-09 02:40', rejections: 2, locked_s: 12.5, ringer: { pin: 18, state: 'ready', sounding: false } },
+      },
+    }));
+    expect(d?.arm).toEqual({
+      armed: false,
+      changedAt: '2026-11-09 02:40',
+      rejections: 2,
+      lockedS: 12.5,
+      ringer: { pin: 18, state: 'ready', sounding: false },
+    });
+  });
+
+  it('gives null arm for an older hub or a broken arm block', () => {
+    expect(parseHubDebug(JSON.stringify({ debug: { links: [] } }))?.arm).toBeNull();
+    expect(parseHubDebug(JSON.stringify({ debug: { arm: { armed: 'yes' } } }))?.arm).toBeNull();
+    expect(parseHubDebug(JSON.stringify({ debug: { arm: { armed: true } } }))?.arm).toEqual({
+      armed: true, changedAt: null, rejections: 0, lockedS: 0, ringer: null,
+    });
+  });
+
   it('turns wrong types into null and skips bad links', () => {
     const d = parseHubDebug(JSON.stringify({
       debug: {
