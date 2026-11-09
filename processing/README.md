@@ -74,10 +74,16 @@ python processing/hub.py --esp1 COM6 --record-csi csi.csv --record radar.csv   #
 
 Then open the dashboard with `?mode=live&sensors=1`. The **Sensors** panel (button next to the endpoint) shows each Wi-Fi side's packets/s, RSSI and activity against its threshold, the radar's distances and energies against its thresholds, ESP1's line rate, and the raw message. Its **Calibrate empty zone** button makes the hub wait 5 s (leave the zone), measure the empty zone for 15 s, and set:
 
-- each Wi-Fi side's threshold to 1.2 x the 95th percentile of its empty activity, saved in `processing/hub_calibration.json` (not committed: it belongs to one room);
-- the radar thresholds by Omar's method (99th percentile + 10, at least 20), saved in `radar_calibration.json`, which `radar_plot.py` and `radar_server.py` also use.
+- each Wi-Fi side's threshold to 1.5 x the 99th percentile of its empty activity (and its baseline to the median), saved in `processing/hub_calibration.json`;
+- the radar thresholds by Omar's method (99th percentile + 10, at least 20), saved in `radar_calibration.json`, which `radar_plot.py` and `radar_server.py` also use. A radar threshold of 70 or more means someone was in range while measuring, so it is not applied or saved.
 
-With `--esp1`, Wi-Fi sides are `left` = ESP2 (`...:02`) and `right` = ESP3 (`...:03`). A side's `motion` means someone is at that side (it cannot tell crossing from walking past). Its activity score: per 0.5 s window, each packet's amplitudes are divided by that packet's median, and the score is the median over usable subcarriers of how much each one varies.
+Neither file is committed: each room needs its own. Without `radar_calibration.json` the radar uses the fixed thresholds in `radar_settings.py` until the first calibration.
+
+The panel also has **Threshold - / +** per side (25% steps, saved) and **Swap left/right** (which board is called left, saved).
+
+With `--esp1`, Wi-Fi sides start as `left` = ESP2 (`...:02`) and `right` = ESP3 (`...:03`). A side's `motion` means someone is at that side (it cannot tell crossing from walking past). Its activity score: per 1 s window, each packet's amplitudes are divided by that packet's median, and the score is the median over usable subcarriers of how much each one varies. Anyone the radar sees within `MAX_DISTANCE_CM` (220) is ALERT; the experimental `--entry-logic` also requires an entry through a side. If ESP1 sends nothing for 5 s (opening the port can leave it stuck), the hub restarts it through RTS.
+
+**On the Raspberry Pi 7" screen (1024x600)** use the kiosk layout: `?mode=live&kiosk=1&side=2`. It has no buttons, so calibrate from another device's browser (`http://<pi-address>:8080/?mode=live&ws=ws://<pi-address>:8765&sensors=1&side=2`).
 
 - **Rule:** Omar's, from `radar_settings.py` at the repo root (thresholds from `radar_calibration.json` when it exists, 0 to 150 cm, 1 s average), so the hub, `radar_plot.py` and `radar_server.py` always agree. Run `radar_calibrate.py` after moving the radar.
 - **Alert:** `inside` while the radar sees a person in the zone, **moving or still**, and for 1.5 s after it loses them (the radar flickers). `approach` when a Wi-Fi side is active, or the radar sees someone beyond the zone (up to `--approach-cm`, 600). Otherwise `clear`.

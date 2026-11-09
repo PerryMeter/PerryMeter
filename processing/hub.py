@@ -76,6 +76,7 @@ from radar_server import read_frames  # noqa: E402
 BAUD = 921600          # radar bridge and ESP1 both use 921600
 SEND_RATE = 10         # messages per second to the dashboard
 STALE_S = 1.0          # no data for this long: send nothing
+ESP1_SILENT_RESET_S = 5.0   # ESP1 silent this long after opening its port: restart it
 HOLD_S = 1.0           # radar presence stays on this long after the radar loses the person
 # Entry logic (with --esp1): the radar alone cannot tell inside from just outside a side, because
 # its view (about 120 degrees) is wider than the triangle's corner (60 degrees). So "inside" needs
@@ -342,7 +343,17 @@ def esp1_reader(port, baud, radar, links, links_lock, stats, csi_path):
             with ser:
                 print(f"ESP1: opened {port}", flush=True)
                 buf = b""
+                quiet_since = time.time()
                 while True:
+                    # Opening the port can leave ESP1 stuck in reset or its bootloader (seen on the
+                    # Pi). If it sends nothing for ESP1_SILENT_RESET_S, pulse EN through RTS (DTR
+                    # stays off, so it boots normally) to restart it.
+                    if time.time() - max(stats.last_line, quiet_since) > ESP1_SILENT_RESET_S:
+                        print("ESP1: no data, restarting it", flush=True)
+                        ser.rts = True
+                        time.sleep(0.2)
+                        ser.rts = False
+                        quiet_since = time.time()
                     buf += ser.read(ser.in_waiting or 1)
                     *lines, buf = buf.split(b"\n")
                     for raw in lines:
