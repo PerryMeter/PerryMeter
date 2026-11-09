@@ -39,3 +39,6 @@ Thumbs.db
 
 # Room calibration written by processing/hub.py
 processing/hub_calibration.json
+
+# Room calibration for the radar (one per room; never commit)
+radar_calibration.json

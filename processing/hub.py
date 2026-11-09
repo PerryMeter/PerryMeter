@@ -114,7 +114,7 @@ DOMINANCE = 0.8
 # person anywhere in the room, not just on the line. Calibration still learns it, so it can be tried.
 BLOCK_MARGIN = 1.5     # line-blocked threshold = this x the 99th percentile of its empty-zone value
 BLOCK_FLOOR = 0.02
-RADAR_THRESHOLD_REFUSE = 95   # a calibrated radar threshold this high means someone was in view
+RADAR_THRESHOLD_REFUSE = 70   # a calibrated radar threshold this high means someone was in view (a quiet empty room gives about 20-50)
 SIDE_BY_MAC = {"1a:00:00:00:00:02": "left", "1a:00:00:00:00:03": "right"}
 HUB_CALIBRATION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hub_calibration.json")
 STATES = {0: "nobody", 1: "moving", 2: "still", 3: "moving+still"}

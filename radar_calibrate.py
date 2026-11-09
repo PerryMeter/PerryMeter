@@ -25,6 +25,7 @@ from radar_settings import CALIBRATION_FILE, MAX_DISTANCE_CM, MIN_DISTANCE_CM, S
 BAUD = 921600        # must match Serial.begin(...) in the ESP32 sketch
 MARGIN = 10          # threshold = empty-room level (99th percentile) + this many points
 FLOOR = 20           # never set a threshold lower than this
+REFUSE = 70          # a threshold this high means the room was not empty: do not save it
 HEAD = b"\xF4\xF3\xF2\xF1"
 TAIL = b"\xF8\xF7\xF6\xF5"
 
@@ -118,6 +119,17 @@ def main():
     moving_t = round(min(100, max(FLOOR, empty_m + MARGIN)))
     still_t = round(min(100, max(FLOOR, empty_s + MARGIN)))
 
+    print(f"\nEmpty room, highest levels (99th percentile of the {SMOOTH_S:g} s average):")
+    print(f"  movement  {empty_m:5.1f}   ->  moving threshold {moving_t}")
+    print(f"  stillness {empty_s:5.1f}   ->  still threshold  {still_t}")
+
+    if moving_t >= REFUSE or still_t >= REFUSE:
+        print(f"\nNOT SAVED: a threshold of {REFUSE} or more means the room was not empty.")
+        print("Something in range was moving or very close to the radar (a person, a fan, the")
+        print("laptop, its own wires). A quiet empty room gives thresholds of about 20 to 50.")
+        print("Clear the area (everyone at least 3 m away) and run this again.")
+        return
+
     result = {
         "moving_threshold": moving_t,
         "still_threshold": still_t,
@@ -134,17 +146,8 @@ def main():
     }
     with open(CALIBRATION_FILE, "w") as f:
         json.dump(result, f, indent=2)
-
-    print(f"\nEmpty room, highest levels (99th percentile of the {SMOOTH_S:g} s average):")
-    print(f"  movement  {empty_m:5.1f}   ->  moving threshold {moving_t}")
-    print(f"  stillness {empty_s:5.1f}   ->  still threshold  {still_t}")
     print(f"Saved to {CALIBRATION_FILE}")
-    print("radar_plot.py and radar_server.py will use these next time they start.")
-    for name, t in (("moving", moving_t), ("still", still_t)):
-        if t >= 95:
-            print(f"\nWarning: the {name} threshold is {t}, so almost nothing can go above it.")
-            print("Something in view was moving or very close to the radar (a fan, a person, the")
-            print("laptop, its own wires). Clear the area, or shorten MAX_DISTANCE_CM, and run again.")
+    print("radar_plot.py, radar_server.py and processing/hub.py will use these next time they start.")
 
 
 if __name__ == "__main__":
