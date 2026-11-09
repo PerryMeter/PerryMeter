@@ -1,31 +1,30 @@
-# data/
+# CSI Recordings
 
-Raw CSI recordings. Everything here except this README and `captures.md` is gitignored; share large recordings on the team drive.
+This directory is used for Wi-Fi Channel State Information (CSI) recordings collected during PerryMeter development and testing.
 
-## Format
+Recording files are excluded from Git to avoid committing large datasets.
 
-CSV with a header `t,label,raw_csi`: host time in seconds, the label, and the hub receiver's raw `CSI_DATA` line unchanged. The line's sender address (third column) says which side it came from: `1a:00:00:00:00:01` left, `:02` right.
+## Data Format
 
-## Naming
+The CSI recorder saves CSV files containing:
 
-```
-YYYYMMDD-HHMM_<scenario>_<location>_<hub>.csv
-```
-
-Example: `20261107-1430_cross-left_hallA_hub1.csv`
-
-| Scenario | What happens |
+| Column | Description |
 |---|---|
-| `empty` | Nobody within about 4 m of the triangle (a person sitting next to a cone is not empty) |
-| `cross-left` | One person walks back and forth across the left side |
-| `cross-right` | The same across the right side |
-| `inside-still` | One person stands still inside the triangle |
-| `near` | Walks along outside a side without crossing it |
-| `crowd` | Nobody near the triangle, people moving 3 to 5 m away |
-| `covered` | `cross-left` with a towel over the nodes |
+| `t` | Recording timestamp |
+| `label` | Recording label |
+| `raw_csi` | Raw CSI data received from ESP1 |
 
-`location` is a short tag for the spot (for example `hallA`), and `hub` the hub id (for example `hub1`).
+The receiver identifies the transmitting ESP32 using its MAC address:
 
-## Notes
+- **ESP2:** `1a:00:00:00:00:02`
+- **ESP3:** `1a:00:00:00:00:03`
 
-Add one line per useful recording to `captures.md`: who, scenario, side lengths, RSSI and packets per second per side, and anything unusual. **Re-record after any cone moves**: calibration from one setup does not carry over to another.
+By default, these correspond to the left and right monitored Wi-Fi links, respectively. The dashboard can swap their displayed labels.
+
+## Recording
+
+CSI recordings can be created using `collection/record_csi.py`.
+
+The recorder generates CSV filenames containing the recording label and timestamp.
+
+These recordings are used for signal analysis, testing, and debugging. Detection performance can vary depending on sensor placement and environmental conditions.
