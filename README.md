@@ -127,16 +127,10 @@ The system is intended to supplement, not replace, established workplace safety 
 
 ## Development
 
-Built by a team of five during **natHacks 2026**, November 6–9, 2026.
+Built by a team of six during **natHacks 2026**, November 6–9, 2026.
 
-Originally developed under the name RadarPing.
 
-## Credits
+## Acknowledgements
 
-- [Espressif esp-csi](https://github.com/espressif/esp-csi) — ESP32 Wi-Fi CSI examples and reference implementations.
-- Hi-Link LD2410C — 24 GHz radar sensing module.
-- Open-source libraries and frameworks referenced in the project's dependency files.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
+- [Espressif ESP-CSI](https://github.com/espressif/esp-csi) — Wi-Fi CSI reference project.
+- Hi-Link LD2410C — 24 GHz radar sensor.
