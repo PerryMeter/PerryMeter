@@ -240,7 +240,10 @@ function zoneText(zone: HubZone): { text: string; tone: Tone } {
     case 'seen_no_entry':
       return { text: 'Radar sees someone, but nobody crossed a side yet: APPROACH, not ALERT', tone: 'warn' };
     case 'left_zone':
-      return { text: 'Crossed back out. APPROACH until the radar stops seeing them', tone: 'warn' };
+      return {
+        text: 'Crossed out through a side: not tracked until they come back in or leave the radar range',
+        tone: 'accent',
+      };
     case 'clear':
       return { text: 'Nobody in the radar range', tone: 'accent' };
     default:
@@ -363,7 +366,11 @@ export function SensorPanel({
                 title="Zone decision"
                 aside={
                   <span className="font-mono text-[11px] text-faint">
-                    {debug.zone.entryLogic ? 'entry logic on' : 'radar only'}
+                    {debug.zone.entryLogic
+                      ? 'entry logic on'
+                      : debug.zone.exitOnCrossing
+                        ? 'radar, exit on crossing'
+                        : 'radar only'}
                   </span>
                 }
               >
