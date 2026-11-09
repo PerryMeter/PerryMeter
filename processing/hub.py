@@ -69,7 +69,7 @@ from websockets.asyncio.server import broadcast, serve
 
 # Omar's radar settings and frame parser live at the repo root
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, REPO_ROOT)
+sys.path.insert(0, os.path.join(REPO_ROOT, "settings"))
 import radar_settings as rs  # noqa: E402
 from radar_server import read_frames  # noqa: E402
 
