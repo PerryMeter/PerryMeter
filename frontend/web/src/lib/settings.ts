@@ -113,3 +113,21 @@ export function getInitialArmed(): boolean {
 export function saveArmed(armed: boolean): void {
   safeSetStorage(ARMED_STORAGE_KEY, armed ? '1' : '0');
 }
+
+const SENSORS_STORAGE_KEY = 'perrymeter.sensors';
+
+/** Sensors panel open: ?sensors=1 or 0 wins, then the saved choice, default closed. */
+export function getInitialSensorsOpen(): boolean {
+  const query = getSearchParam('sensors');
+  if (query === '1') return true;
+  if (query === '0') return false;
+  try {
+    return window.localStorage.getItem(SENSORS_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function saveSensorsOpen(open: boolean): void {
+  safeSetStorage(SENSORS_STORAGE_KEY, open ? '1' : '0');
+}

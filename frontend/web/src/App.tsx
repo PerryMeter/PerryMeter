@@ -3,6 +3,7 @@ import { ActivityGraph } from './components/ActivityGraph';
 import { EventList } from './components/EventList';
 import { MetricCard } from './components/MetricCard';
 import { NodesPanel } from './components/NodesPanel';
+import { SensorPanel } from './components/SensorPanel';
 import { ZoneMap } from './components/ZoneMap';
 import { SourceBar } from './components/SourceBar';
 import { StatusFooter } from './components/StatusFooter';
@@ -14,10 +15,12 @@ import type { Mode } from './lib/settings';
 import {
   getInitialArmed,
   getInitialMode,
+  getInitialSensorsOpen,
   getInitialWsUrl,
   isKioskMode,
   saveArmed,
   saveMode,
+  saveSensorsOpen,
   saveWsUrl,
 } from './lib/settings';
 
@@ -28,6 +31,7 @@ export default function App() {
   const [armed, setArmedState] = useState<boolean>(() => getInitialArmed());
   const [soundOn, setSoundOn] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+  const [sensorsOpen, setSensorsOpen] = useState<boolean>(() => getInitialSensorsOpen());
 
   const alarmRef = useRef<ZoneAlarm | null>(null);
 
@@ -49,6 +53,9 @@ export default function App() {
     signalRef,
     simulateEntry,
     setPaused,
+    debug,
+    rawMessage,
+    sendCommand,
   } = useDetectionStream(mode, wsUrl, armed);
 
   // Initialize and clean up alarm instance
@@ -130,6 +137,12 @@ export default function App() {
     setPaused(nextPaused);
   };
 
+  const handleToggleSensors = () => {
+    const next = !sensorsOpen;
+    setSensorsOpen(next);
+    saveSensorsOpen(next);
+  };
+
   return (
     <div
       className={`min-h-[100dvh] h-[100dvh] flex flex-col ${
@@ -161,6 +174,24 @@ export default function App() {
           onSimulateEntry={simulateEntry}
           onTogglePause={handleTogglePause}
           onApplyWsUrl={handleApplyWsUrl}
+          sensorsOpen={sensorsOpen}
+          onToggleSensors={handleToggleSensors}
+        />
+      )}
+
+      {!isKiosk && (
+        <SensorPanel
+          open={sensorsOpen}
+          onClose={handleToggleSensors}
+          mode={mode}
+          status={status}
+          isFresh={isFresh}
+          debug={debug}
+          rawMessage={rawMessage}
+          onCalibrate={() => sendCommand({ type: 'calibrate' })}
+          onCancelCalibration={() => sendCommand({ type: 'cancel_calibration' })}
+          onAdjustThreshold={(side, factor) => sendCommand({ type: 'adjust_threshold', side, factor })}
+          onSwapSides={() => sendCommand({ type: 'swap_sides' })}
         />
       )}
 
@@ -191,16 +222,7 @@ export default function App() {
                 now={now}
                 className="p-3 shrink-0"
               />
-              <div className="grid grid-cols-2 gap-2 shrink-0">
-                <MetricCard
-                  type="strength"
-                  value={latest?.strength ?? null}
-                  motion={isFresh && (latest?.motion ?? false)}
-                  isFresh={isFresh}
-                  lastMessageAt={lastMessageAt}
-                  now={now}
-                  className="p-3"
-                />
+              <div className="shrink-0">
                 <MetricCard
                   type="confidence"
                   value={latest?.confidence ?? null}
@@ -245,15 +267,7 @@ export default function App() {
                   isFresh={isFresh}
                   now={now}
                 />
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <MetricCard
-                    type="strength"
-                    value={latest?.strength ?? null}
-                    motion={isFresh && (latest?.motion ?? false)}
-                    isFresh={isFresh}
-                    lastMessageAt={lastMessageAt}
-                    now={now}
-                  />
+                <div>
                   <MetricCard
                     type="confidence"
                     value={latest?.confidence ?? null}

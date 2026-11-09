@@ -30,11 +30,11 @@ export function EventList({ events, className }: EventListProps) {
             const durationText = isOngoing
               ? 'ongoing'
               : formatDuration((evt.endAt! - evt.startAt) / 1000);
-            const peakText = `peak ${Math.round(evt.peak * 100)}%`;
-
             let entryLabel: string;
-            if (evt.side) {
-              entryLabel = `Entry, ${evt.side} side active`;
+            if (evt.side === 'base') {
+              entryLabel = 'Entry from the radar side';
+            } else if (evt.side) {
+              entryLabel = `Entry from the ${evt.side} side`;
             } else {
               entryLabel = 'Entry';
             }
@@ -53,16 +53,13 @@ export function EventList({ events, className }: EventListProps) {
                   </span>
                   <span className="text-text">{entryLabel}</span>
                 </div>
-                <div className="flex items-center gap-4">
-                  <span
-                    className={
-                      isOngoing ? 'text-motion font-medium' : 'text-muted tabular-nums'
-                    }
-                  >
-                    {durationText}
-                  </span>
-                  <span className="text-muted tabular-nums">{peakText}</span>
-                </div>
+                <span
+                  className={
+                    isOngoing ? 'text-motion font-medium' : 'text-muted tabular-nums'
+                  }
+                >
+                  {durationText}
+                </span>
               </div>
             );
           })

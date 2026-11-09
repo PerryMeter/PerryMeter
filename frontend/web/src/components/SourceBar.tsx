@@ -9,6 +9,8 @@ type SourceBarProps = {
   onSimulateEntry: () => void;
   onTogglePause: () => void;
   onApplyWsUrl: (url: string) => void;
+  sensorsOpen: boolean;
+  onToggleSensors: () => void;
 };
 
 export function SourceBar({
@@ -19,6 +21,8 @@ export function SourceBar({
   onSimulateEntry,
   onTogglePause,
   onApplyWsUrl,
+  sensorsOpen,
+  onToggleSensors,
 }: SourceBarProps) {
   const [inputUrl, setInputUrl] = useState(wsUrl);
   const [urlError, setUrlError] = useState<string | null>(null);
@@ -113,6 +117,18 @@ export function SourceBar({
           )}
         </div>
       )}
+      <button
+        type="button"
+        onClick={onToggleSensors}
+        aria-pressed={sensorsOpen}
+        className={`px-3 py-1 rounded-[6px] border text-[13px] focus:outline-none focus:ring-1 focus:ring-accent transition-colors ${
+          sensorsOpen
+            ? 'border-accent/60 bg-accent/10 text-accent'
+            : 'border-line-strong bg-surface text-text hover:bg-surface-2'
+        }`}
+      >
+        Sensors
+      </button>
     </div>
   );
 }

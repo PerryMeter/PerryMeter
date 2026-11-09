@@ -60,25 +60,32 @@ Then open the dashboard with `?mode=live` (from another device: `?mode=live&ws=w
 
 Test on 2026-11-07, replaying `no_movement` → `walking_between` → `no_movement`: 10.0 messages/s, 0 invalid, ALERT about 2 s into `walking_between`, back to clear about 4 s after it ended. The first 5 s of `no_movement` also raise a short false alarm. That comes from the recording, not the server: the summary above flags 8% of that file as movement.
 
-## Hub server (`hub.py`), radar for now
+## Hub server (`hub.py`)
 
-The server for the demo. It reads the LD2410C radar through the Feather bridge (`firmware/radar_bridge`) and sends the dashboard message on `ws://0.0.0.0:8765` about 10 times a second. The Wi-Fi sides will be added to this same server.
+The server for the demo. It sends the dashboard message on `ws://0.0.0.0:8765` about 10 times a second.
 
 ```bash
-pip install pyserial websockets
-python processing/hub.py --radar COM5                    # real radar (use your port; on the Pi, /dev/serial/by-id/...)
+pip install pyserial websockets numpy
+python processing/hub.py --esp1 COM6                     # ESP1: both Wi-Fi sides + the radar on one port (firmware/csi/csi_recv_esp1)
+python processing/hub.py --radar COM5                    # the radar alone, through the Feather bridge
 python processing/hub.py --fake-radar                    # simulated radar, no hardware
-python processing/hub.py --radar COM5 --record log.csv   # also save every radar frame with its time
+python processing/hub.py --esp1 COM6 --record-csi csi.csv --record radar.csv   # also save the raw data
 ```
 
-Then open the dashboard with `?mode=live`.
+Then open the dashboard with `?mode=live&sensors=1`. The **Sensors** panel (button next to the endpoint) shows each Wi-Fi side's packets/s, RSSI and activity against its threshold, the radar's distances and energies against its thresholds, ESP1's line rate, and the raw message. Its **Calibrate empty zone** button makes the hub wait 5 s (leave the zone), measure the empty zone for 15 s, and set:
+
+- each Wi-Fi side's threshold to 1.2 x the 95th percentile of its empty activity, saved in `processing/hub_calibration.json` (not committed: it belongs to one room);
+- the radar thresholds by Omar's method (99th percentile + 10, at least 20), saved in `radar_calibration.json`, which `radar_plot.py` and `radar_server.py` also use.
+
+With `--esp1`, Wi-Fi sides are `left` = ESP2 (`...:02`) and `right` = ESP3 (`...:03`). A side's `motion` means someone is at that side (it cannot tell crossing from walking past). Its activity score: per 0.5 s window, each packet's amplitudes are divided by that packet's median, and the score is the median over usable subcarriers of how much each one varies.
 
 - **Rule:** Omar's, from `radar_settings.py` at the repo root (thresholds from `radar_calibration.json` when it exists, 0 to 150 cm, 1 s average), so the hub, `radar_plot.py` and `radar_server.py` always agree. Run `radar_calibrate.py` after moving the radar.
-- **Alert:** `inside` while the radar sees a person in the zone, **moving or still**, and for 1.5 s after it loses them (the radar flickers). `approach` when it sees someone beyond the zone, up to `--approach-cm` (600). Otherwise `clear`.
-- **Motion:** true while the person is moving, so the dashboard shows `not moving` for someone standing still inside.
-- **Nodes:** `hub` and `radar`. No `links` yet, so the dashboard draws the Wi-Fi sides as not installed.
+- **Alert:** `inside` while the radar sees a person in the zone, **moving or still**, and for 1.5 s after it loses them (the radar flickers). `approach` when a Wi-Fi side is active, or the radar sees someone beyond the zone (up to `--approach-cm`, 600). Otherwise `clear`.
+- **Motion:** true while a side is active or the radar sees a moving person, so the dashboard shows `not moving` for someone standing still inside.
+- **Nodes:** `hub`, the Wi-Fi sides (with `--esp1`) and `radar`, each online while its data arrives. Without `--esp1` there are no `links`, so the dashboard draws the Wi-Fi sides as not installed.
 - **No data:** if the radar sends nothing for 1 s, the hub sends nothing, so the dashboard shows that data stopped instead of a false CLEAR.
-- **Extra field:** `radar` (prediction, averaged energies, thresholds) for debugging. The dashboard ignores it.
+- **Extra field:** `debug` (per-side packets/s, RSSI, score and threshold; radar raw frame, averaged energies, thresholds and prediction; ESP1 line rate; calibration state) for the Sensors panel. The main dashboard ignores it.
+- **Commands:** the hub reads `{"type": "calibrate"}` (optional `countdown_s`, `seconds`) and `{"type": "cancel_calibration"}` from any dashboard.
 
 Test on 2026-11-07 with `--fake-radar`: clear, then inside while walking, still inside with `motion` false while standing, approach for someone beyond the zone, then clear; 0 contract problems. With the real radar on COM5: inside, moving and still, at 0.45 to 1.5 m, about 9 messages/s, and the dashboard showed ALERT, `not moving` and the distance arc with 0 invalid messages.
 
