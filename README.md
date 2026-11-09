@@ -1,73 +1,142 @@
-# Perrymeter
+# PerryMeter
 
-**A portable, camera-free safety perimeter for temporary work zones.** Three traffic cones form a **danger triangle**: Wi-Fi signals between the cones act as invisible tripwires, and a 24 GHz radar at the top corner watches the inside, even for someone standing still. When a person crosses a side, Perrymeter tells the crew which side within about a second. It works through dust, mud and darkness, needs no tags, and records no video.
+**A camera-free safety monitoring system for temporary hazardous work zones.**
 
-natHacks 2026, Construction & Manufacturing theme. Team of 5, built during the 64-hour event (Nov 6 to 9, 2026). Formerly called RadarPing (the repository name).
+PerryMeter is a portable, multi-sensor prototype developed for **natHacks 2026** under the Construction & Manufacturing theme.
 
-**Start with [`project.md`](project.md)**: the full guide to the idea, the triangle, detection, message format, dashboard, business model, demo and timeline.
+It combines ESP32 Wi-Fi Channel State Information (CSI) with an LD2410C 24 GHz radar sensor to monitor a triangular hazardous area.
 
-## Getting the code
+The ESP32 devices establish two wireless detection boundaries, while the radar monitors the space between them, including people who remain stationary. These sensing methods complement each other: Wi-Fi CSI helps identify boundary crossings, while radar provides additional presence detection within the monitored area.
 
-```bash
-git clone https://github.com/isr808/RadarPing.git
-cd RadarPing
+A Raspberry Pi processes the sensor data and sends live updates to a browser-based dashboard, allowing operators to monitor activity without using cameras.
+
+## How It Works
+
+PerryMeter uses three ESP32 devices, one LD2410C radar sensor, and a Raspberry Pi.
+
+**1. Wi-Fi boundary detection**
+
+- ESP2 and ESP3 transmit Wi-Fi signals to ESP1.
+- ESP1 collects CSI measurements from both connections.
+- Changes in the wireless signals are analyzed to detect movement across the two monitored sides.
+- The system can distinguish which monitored boundary has been crossed.
+
+**2. Radar-based presence detection**
+
+- The LD2410C radar is connected to ESP1.
+- The radar monitors the interior of the triangular area.
+- It provides additional presence detection, including for stationary people.
+
+**3. Data processing**
+
+- The Raspberry Pi processes the incoming sensor information.
+- Wi-Fi CSI and radar measurements are used together to determine the monitored zone's status.
+- The processing system sends updates to the dashboard.
+
+**4. Live monitoring dashboard**
+
+The browser-based dashboard provides:
+
+- Live detection status: Clear, Approach, or Inside
+- Side-specific boundary detection
+- Signal strength and confidence information
+- Arm/disarm controls
+
+The two Wi-Fi connections monitor two sides of the triangular arrangement. The radar complements them by monitoring the interior; there is no separate Wi-Fi detection link between ESP2 and ESP3.
+
+## System Architecture
+
+```text
+       ESP2                  ESP3
+    (Transmitter)         (Transmitter)
+          \                  /
+           \  Wi-Fi CSI     /
+            \              /
+             \            /
+              ESP1
+       (Receiver + LD2410C)
+                 |
+                 v
+           Raspberry Pi
+        (Signal Processing)
+                 |
+                 v
+           WebSocket Server
+                 |
+                 v
+          Web Dashboard
+      (Live Safety Monitoring)
 ```
 
-## How it works
-
-```
-                    HUB cone: Raspberry Pi + receiver ESP32 + LD2410C radar
-                       /\
-       Wi-Fi tripwire /  \ Wi-Fi tripwire        radar watches the inside
-                     /    \
-       LEFT node cone /______\ RIGHT node cone   (ESP32 senders on power banks)
-
-  receiver ESP32 --USB--> processing/ (Python on the Pi)
-  radar ----------USB-->  per-side detection + radar -> alert: clear / approach / inside
-                                   | WebSocket, 10 messages/s
-                                   v
-                          frontend/web/ (dashboard in any browser)
-```
-
-1. **firmware/**: Espressif's `esp-csi` examples. Each node broadcasts small packets with its own sender address; the hub's receiver measures the Channel State Information (CSI) of each and prints it over USB.
-2. **collection/**: records CSI lines with timestamps and labels for tuning.
-3. **processing/**: scores how much each side's signal is disturbed compared with an empty-zone calibration, reads the radar, decides the alert level, and serves it over WebSocket.
-4. **frontend/web/**: live dashboard with a map of the triangle, zone status, strength and confidence, node health, a 60-second activity graph, an event log, and arm/disarm.
-
-The message format between `processing/` and the dashboard is in [`docs/detection-contract.md`](docs/detection-contract.md).
-
-## Repo layout
+## Repository Structure
 
 | Path | Purpose |
 |---|---|
-| `project.md` | Full project guide |
-| `firmware/` | ESP32 setup notes (Espressif `esp-csi` examples) |
-| `collection/` | CSI recorder |
-| `processing/` | Per-side detection, radar reader, WebSocket server |
-| `frontend/web/` | Dashboard (React, TypeScript, Vite) |
-| `frontend/pi_display/` | Earlier PySide6 prototype, not used |
-| `data/` | Recordings (gitignored except its README and captures list) |
-| `docs/` | Plan, message format, results |
+| `firmware/` | ESP32 sender and receiver firmware |
+| `collection/` | CSI data collection and recording |
+| `processing/` | Sensor processing, detection logic, and backend server |
+| `frontend/web/` | Web dashboard built with React, TypeScript, and Vite |
+| `data/` | Recorded CSI datasets and related documentation |
+| `docs/` | Technical documentation |
+| `project.md` | Additional project design and development notes |
+| `frontend/pi_display/` | Earlier PySide6 dashboard prototype |
 
-## Running it
+## Getting the Code
 
-| Part | Command |
-|---|---|
-| Firmware | `idf.py set-target esp32`, then `idf.py -p <PORT> flash monitor` in `csi_send` (each node with its own sender address) and `csi_recv` (see `project.md` section 5) |
-| Recorder | `python collection/record_csi.py <label> <seconds> --port <PORT> --out data/` |
-| Server | `python processing/server.py --csi <PORT>`, or replay recordings with `--csi data/<file>.csv --loop` (see `processing/README.md`) |
-| Dashboard | `cd frontend/web && npm install && npm run dev`, then open it with `?mode=live` to connect to `ws://localhost:8765` |
+```bash
+git clone https://github.com/PerryMeter/PerryMeter.git
+cd PerryMeter
+```
 
-The server currently handles one side; per-side detection for the triangle is next (see `project.md` section 10).
+## Running the Prototype
+
+The system consists of three main components:
+
+1. **ESP32 firmware:** Configure and flash the sender and receiver firmware in `firmware/`.
+2. **Raspberry Pi backend:** Connect the receiving ESP32 and launch the processing service using the instructions in `processing/README.md`.
+3. **Web dashboard:** Start the frontend development server.
+
+The dashboard's documented local development commands are:
+
+```bash
+cd frontend/web
+npm install
+npm run dev
+```
+
+The firmware configuration and Raspberry Pi startup commands must be checked against the final hardware setup before deployment.
+
+## Intended Application
+
+PerryMeter is designed as an additional monitoring layer for temporary hazardous work zones, particularly in construction and manufacturing environments.
+
+Its purpose is to help workers and supervisors become aware of movement near monitored boundaries and presence within designated areas without requiring cameras or wearable tags.
+
+Potential applications include temporary maintenance zones, restricted equipment areas, and other locations where an extra layer of activity monitoring could be useful.
+
+## Prototype Scope and Limitations
+
+PerryMeter is a hackathon prototype, not a certified industrial safety system.
+
+- Wi-Fi CSI provides monitoring along two configured wireless links, not unrestricted detection throughout the surrounding environment.
+- Interior detection depends on the radar's sensing coverage and placement.
+- Detection performance can vary with the environment, sensor positioning, and calibration.
+- Response time, detection accuracy, and reliability under industrial conditions require further validation.
+
+The system is intended to supplement, not replace, established workplace safety procedures and physical barriers.
+
+## Development
+
+Built by a team of five during **natHacks 2026**, November 6–9, 2026.
+
+Originally developed under the name RadarPing.
 
 ## Credits
 
-- [Espressif `esp-csi`](https://github.com/espressif/esp-csi): the ESP32 sender and receiver firmware, used with the settings described in `project.md`.
-- Hi-Link LD2410C radar module and its published serial protocol.
-- Open-source libraries listed in each part's requirements and `package.json`.
-
-All other code was written by the team during the competition window.
+- [Espressif esp-csi](https://github.com/espressif/esp-csi) — ESP32 Wi-Fi CSI examples and reference implementations.
+- Hi-Link LD2410C — 24 GHz radar sensing module.
+- Open-source libraries and frameworks referenced in the project's dependency files.
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
