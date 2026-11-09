@@ -20,6 +20,10 @@ What the dashboard gets
     alert       "inside"   the radar sees a person in range, moving or still (the rule in
                            radar_settings.py, held for HOLD_S). With the experimental
                            --entry-logic they must also have entered (see ZoneGate).
+                           With --esp1, once someone has been inside EXIT_MIN_INSIDE_S, a Wi-Fi side
+                           firing again means they crossed out: they are no longer tracked (the
+                           radar may still see them just outside the line) until a side fires
+                           again after REENTRY_QUIET_S, or the radar loses them.
                 "approach" a Wi-Fi side is active (someone at a side). Nothing past the zone
                            (MAX_DISTANCE_CM) is tracked unless --approach-cm is given.
                 "clear"    otherwise
@@ -540,21 +544,9 @@ class ZoneGate:
         if not self.present_before:
             self.first_seen_cm, self.present_before = dist_cm, True
 
-        if not self.enabled:
-            # Radar decides: anyone in range is inside. The Wi-Fi sides only name the entry side
-            # (for the arrow), they never hold back an ALERT.
-            if not self.inside:
-                self.inside, self.inside_since, self.state = True, now, "inside"
-                recent = [(t, s) for s, t in self.last_rise.items() if now - t <= ENTRY_WINDOW_S]
-                if recent:
-                    self.entry_side = max(recent)[1]
-                elif self.first_seen_cm is not None and self.first_seen_cm >= FAR_ENTRY_FRACTION * rs.MAX_DISTANCE_CM:
-                    self.entry_side = "base"
-                else:
-                    self.entry_side = None
-            return
-
         if self.inside:
+            # Crossing back out: a side fires again after they have been inside a moment. The radar
+            # may still see them outside (it has no direction), so stop tracking them.
             if self.exit_on_crossing and rose and now - self.inside_since >= EXIT_MIN_INSIDE_S:
                 self.inside, self.entry_side, self.inside_since = False, None, None
                 self.exit_at, self.first_seen_cm, self.state = now, None, "left_zone"
@@ -566,9 +558,16 @@ class ZoneGate:
             return
 
         recent = [(t, s) for s, t in self.last_rise.items() if now - t <= ENTRY_WINDOW_S and t > self.exit_at]
-        if recent:
+        far = self.first_seen_cm is not None and self.first_seen_cm >= FAR_ENTRY_FRACTION * rs.MAX_DISTANCE_CM
+        if not self.enabled and self.state != "left_zone":
+            # Radar decides: anyone in range is inside. The Wi-Fi sides only name the entry side
+            # (for the arrow); they never hold back an ALERT.
+            self.inside = True
+            self.entry_side = max(recent)[1] if recent else ("base" if far else None)
+        elif recent:
+            # Entry logic, or coming back in after crossing out: needs a side to fire again
             self.inside, self.entry_side = True, max(recent)[1]
-        elif self.first_seen_cm is not None and self.first_seen_cm >= FAR_ENTRY_FRACTION * rs.MAX_DISTANCE_CM:
+        elif far:
             self.inside, self.entry_side = True, "base"
         if self.inside:
             self.inside_since, self.state = now, "inside"
@@ -885,8 +884,12 @@ async def run(args):
             else:
                 if gate.inside:
                     alert, distance_cm = "inside", r["inside_cm"] if r else None
+                elif radar_present and gate.state == "left_zone":
+                    # They crossed out through a side: the radar still sees them outside the line,
+                    # so stop tracking them (no ALERT, no distance) until they come back in
+                    alert, distance_cm = ("approach" if side_active else "clear"), None
                 elif radar_present:
-                    # The radar sees someone, but there was no entry (or they crossed back out)
+                    # --entry-logic only: the radar sees someone who has not entered
                     alert, distance_cm = "approach", r["inside_cm"]
                 elif side_active or (r and r["far_cm"] is not None):
                     alert, distance_cm = "approach", (r["far_cm"] if r else None)
@@ -986,7 +989,7 @@ def main():
                    help="experimental: ALERT only after an entry (a Wi-Fi side fired, or the radar first saw "
                         "them far away); otherwise anyone the radar sees in range is ALERT")
     p.add_argument("--no-exit-on-crossing", action="store_true",
-                   help="with --entry-logic: stay ALERT until the radar loses the person")
+                   help="stay ALERT until the radar loses the person, even after they cross out through a side")
     p.add_argument("--line-blocked", action="store_true",
                    help="experimental: also trigger a side when its signal pattern differs from the "
                         "empty zone (off by default, see BLOCK_MARGIN)")
