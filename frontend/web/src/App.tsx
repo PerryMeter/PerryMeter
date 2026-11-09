@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityGraph } from './components/ActivityGraph';
+import { ArmDialog } from './components/ArmDialog';
 import { DetailPanel } from './components/DetailPanel';
 import { EventList } from './components/EventList';
 import { ConfidenceCard } from './components/MetricCard';
@@ -29,7 +30,6 @@ import {
   isKioskMode,
   loadSettings,
   resolveTheme,
-  saveArmed,
   saveMode,
   saveSensorsOpen,
   saveSettings,
@@ -40,7 +40,10 @@ export default function App() {
   const [isKiosk] = useState(() => isKioskMode());
   const [mode, setModeState] = useState<Mode>(() => getInitialMode());
   const [wsUrl, setWsUrlState] = useState<string>(() => getInitialWsUrl());
-  const [armed, setArmedState] = useState<boolean>(() => getInitialArmed());
+  // This browser's old saved arm state: only used with a hub that cannot arm (no debug.arm)
+  const [localArmed] = useState<boolean>(() => getInitialArmed());
+  // The PIN dialog: the state being asked for, or null when closed
+  const [armTarget, setArmTarget] = useState<boolean | null>(null);
   const [settings, setSettings] = useState<DashboardSettings>(() => {
     const loaded = loadSettings();
     applyThemeAttribute(resolveTheme(loaded.theme));
@@ -80,7 +83,10 @@ export default function App() {
     rawMessage,
     sendCommand,
     confidence,
-  } = useDetectionStream(mode, wsUrl, armed);
+  } = useDetectionStream(mode, wsUrl, localArmed);
+
+  // The hub keeps the arm state (changed only with the PIN), so every screen and the ringer agree
+  const armed = debug?.arm ? debug.arm.armed : localArmed;
 
   // Theme: data-theme on <html> is set before the components read their colours; "system" follows the OS
   const resolvedTheme = settings.theme === 'system' ? systemTheme : settings.theme;
@@ -144,10 +150,10 @@ export default function App() {
     setIsPaused(false);
   };
 
-  const handleArmedChange = (nextArmed: boolean) => {
-    setArmedState(nextArmed);
-    saveArmed(nextArmed);
+  const requestArm = (nextArmed: boolean) => {
+    if (nextArmed !== armed) setArmTarget(nextArmed);
   };
+  const closeArmDialog = useCallback(() => setArmTarget(null), []);
 
   const handleChangeSettings = (next: DashboardSettings) => {
     if (next.soundOn && !settings.soundOn) alarmRef.current?.init();
@@ -279,6 +285,7 @@ export default function App() {
           units={units}
           debug={debug}
           sendCommand={sendCommand}
+          onRequestArm={requestArm}
           onSwitchToAdmin={() => switchView('admin')}
         />
       ) : (
@@ -294,7 +301,7 @@ export default function App() {
         sensorsOpen={sensorsOpen}
         settingsOpen={settingsOpen}
         onModeChange={handleModeChange}
-        onArmedChange={handleArmedChange}
+        onArmedChange={requestArm}
         onToggleSensors={handleToggleSensors}
         onToggleSettings={handleToggleSettings}
         onSwitchToSimple={() => switchView('simple')}
@@ -437,6 +444,10 @@ export default function App() {
         </>
       )}
       </>
+      )}
+
+      {armTarget !== null && (
+        <ArmDialog key={String(armTarget)} target={armTarget} arm={debug?.arm ?? null} isFresh={isFresh} sendCommand={sendCommand} onClose={closeArmDialog} />
       )}
     </div>
   );
