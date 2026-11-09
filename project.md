@@ -144,6 +144,6 @@ However:
 
 ## 10. Development
 
-Developed by a team of five during **natHacks 2026**, November 6–9, 2026.
+Developed by a team of six during **natHacks 2026**, November 6–9, 2026.
 
 Originally named RadarPing.
